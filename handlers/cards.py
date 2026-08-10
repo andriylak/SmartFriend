@@ -1,60 +1,139 @@
 import re
+import logging
 from aiogram import Router, F
 from aiogram.filters import Command
 from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, CallbackQuery
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 
+import config
 import database
-from keyboards import get_main_keyboard, get_cancel_keyboard
+import ai_service
+from keyboards import (
+    get_main_keyboard,
+    get_cancel_keyboard,
+    get_card_creation_mode_keyboard,
+    get_ai_prompt_presets_keyboard,
+    get_ai_preview_keyboard
+)
+
+logger = logging.getLogger(__name__)
 
 router = Router()
 
 class CreateCardStates(StatesGroup):
+    waiting_for_mode = State()
     waiting_for_category = State()
     waiting_for_question = State()
     waiting_for_answer = State()
+    waiting_for_ai_prompt_preset = State()
+    waiting_for_ai_custom_prompt = State()
+    waiting_for_ai_topic = State()
+    waiting_for_ai_preview = State()
+    waiting_for_edit_question = State()
+    waiting_for_edit_answer = State()
 
+# Step 0: Start creation process
 @router.message(F.text == "➕ Create Card")
 @router.message(Command("create"))
 async def start_create_card(message: Message, state: FSMContext):
-    await state.set_state(CreateCardStates.waiting_for_category)
-    
-    # Simple keyboard with 'General' option and 'Cancel'
-    category_kb = ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="General")],
-            [KeyboardButton(text="❌ Cancel")]
-        ],
-        resize_keyboard=True,
-        placeholder="Enter category name or tap 'General'..."
-    )
+    await state.set_state(CreateCardStates.waiting_for_mode)
     
     await message.answer(
-        "📁 **Step 1: Category**\n\n"
-        "Please enter a category for your card (e.g., *Math*, *Python*, *History*), or tap **General** to use the default.",
-        reply_markup=category_kb,
+        "⚙️ **How would you like to create your flashcard?**\n\n"
+        "🤖 **AI-Assisted Card**: Generate flashcards automatically using AI (with pre-set prompts like *Language Learning*, *Definitions*, or your own *Custom Prompt*).\n"
+        "✍️ **Manual Card**: Type the Question and Answer yourself.",
+        reply_markup=get_card_creation_mode_keyboard(),
         parse_mode="Markdown"
     )
 
+# Step 0.5: Handle creation mode selection
+@router.message(CreateCardStates.waiting_for_mode)
+async def process_creation_mode(message: Message, state: FSMContext):
+    choice = message.text.strip()
+    
+    if choice == "✍️ Manual Card":
+        await state.update_data(is_ai=False)
+        await state.set_state(CreateCardStates.waiting_for_category)
+        
+        category_kb = ReplyKeyboardMarkup(
+            keyboard=[
+                [KeyboardButton(text="General")],
+                [KeyboardButton(text="❌ Cancel")]
+            ],
+            resize_keyboard=True,
+            placeholder="Enter category name or tap 'General'..."
+        )
+        await message.answer(
+            "📁 **Category**\n\n"
+            "Please enter a category for your card (e.g., *Math*, *Python*, *Spanish*), or tap **General** to use default.",
+            reply_markup=category_kb,
+            parse_mode="Markdown"
+        )
+        
+    elif choice == "🤖 AI-Assisted Card":
+        if not config.GEMINI_API_KEY:
+            await message.answer(
+                "⚠️ **AI API Key Not Found**\n\n"
+                "`GEMINI_API_KEY` is not set in `.env`. AI card generation requires a valid Google Gemini API key.\n\n"
+                "You can still create cards manually!",
+                reply_markup=get_main_keyboard(),
+                parse_mode="Markdown"
+            )
+            await state.clear()
+            return
+            
+        await state.update_data(is_ai=True)
+        await state.set_state(CreateCardStates.waiting_for_category)
+        
+        category_kb = ReplyKeyboardMarkup(
+            keyboard=[
+                [KeyboardButton(text="General")],
+                [KeyboardButton(text="❌ Cancel")]
+            ],
+            resize_keyboard=True,
+            placeholder="Enter deck/category name or tap 'General'..."
+        )
+        await message.answer(
+            "🤖 **AI Flashcard Assistant - Step 1: Category**\n\n"
+            "Enter a category/deck for your AI-generated card (e.g., *Spanish*, *History*, *Python*), or tap **General**.",
+            reply_markup=category_kb,
+            parse_mode="Markdown"
+        )
+    else:
+        await message.answer("Please select an option from the menu: 🤖 **AI-Assisted Card** or ✍️ **Manual Card**.")
+
+# Step 1: Process Category (for both Manual and AI)
 @router.message(CreateCardStates.waiting_for_category)
 async def process_category(message: Message, state: FSMContext):
     category = message.text.strip()
     if not category:
-        await message.answer("Please enter a valid non-empty category name.")
+        await message.answer("Please enter a valid category name.")
         return
         
     await state.update_data(category=category)
-    await state.set_state(CreateCardStates.waiting_for_question)
+    data = await state.get_data()
+    is_ai = data.get("is_ai", False)
     
-    await message.answer(
-        "❓ **Step 2: Question**\n\n"
-        f"Category selected: *{category}*\n\n"
-        "Now, type the **Question** or prompt for the front side of your learning card.",
-        reply_markup=get_cancel_keyboard(),
-        parse_mode="Markdown"
-    )
+    if is_ai:
+        await state.set_state(CreateCardStates.waiting_for_ai_prompt_preset)
+        await message.answer(
+            f"🎯 **AI Step 2: Choose Prompt Type** (Category: *{category}*)\n\n"
+            "Select one of the default AI prompt presets below, or choose ✏️ **Custom Prompt** to write your own instructions:",
+            reply_markup=get_ai_prompt_presets_keyboard(),
+            parse_mode="Markdown"
+        )
+    else:
+        await state.set_state(CreateCardStates.waiting_for_question)
+        await message.answer(
+            "❓ **Step 2: Question**\n\n"
+            f"Category selected: *{category}*\n\n"
+            "Now, type the **Question** or prompt for the front side of your learning card.",
+            reply_markup=get_cancel_keyboard(),
+            parse_mode="Markdown"
+        )
 
+# --- MANUAL CARD FLOW ---
 @router.message(CreateCardStates.waiting_for_question)
 async def process_question(message: Message, state: FSMContext):
     question = message.text.strip()
@@ -83,7 +162,6 @@ async def process_answer(message: Message, state: FSMContext):
     category = user_data.get("category", "General")
     question = user_data.get("question")
     
-    # Save to SQLite database
     card_id = database.add_card(
         user_id=message.from_user.id,
         question=question,
@@ -103,6 +181,242 @@ async def process_answer(message: Message, state: FSMContext):
     )
     await message.answer(success_text, reply_markup=get_main_keyboard(), parse_mode="Markdown")
 
+# --- AI-ASSISTED CARD FLOW ---
+@router.message(CreateCardStates.waiting_for_ai_prompt_preset)
+async def process_ai_preset(message: Message, state: FSMContext):
+    preset_text = message.text.strip()
+    
+    preset_map = {
+        "🌐 Language Learning": "language",
+        "📚 Definitions & Concepts": "definitions",
+        "💻 Programming & Syntax": "programming",
+        "🧠 General Knowledge": "trivia",
+        "✏️ Custom Prompt": "custom"
+    }
+    
+    preset_key = preset_map.get(preset_text)
+    if not preset_key:
+        await message.answer("Please select a valid preset from the keyboard below.")
+        return
+        
+    await state.update_data(preset_key=preset_key, preset_text=preset_text)
+    
+    if preset_key == "custom":
+        await state.set_state(CreateCardStates.waiting_for_ai_custom_prompt)
+        await message.answer(
+            "✏️ **AI Step 3: Your Custom Prompt**\n\n"
+            "Please type your custom instructions for generating the flashcard.\n"
+            "For example: *Create a flashcard comparing synchronous vs asynchronous execution in Python*",
+            reply_markup=get_cancel_keyboard(),
+            parse_mode="Markdown"
+        )
+    else:
+        await state.set_state(CreateCardStates.waiting_for_ai_topic)
+        await message.answer(
+            f"📝 **AI Step 3: Enter Topic or Phrase**\n\n"
+            f"Selected Preset: *{preset_text}*\n\n"
+            "What word, phrase, or topic do you want the AI to create a card for? "
+            "(e.g., *Spanish food vocabulary*, *Photosynthesis*, *Python list comprehension*)",
+            reply_markup=get_cancel_keyboard(),
+            parse_mode="Markdown"
+        )
+
+@router.message(CreateCardStates.waiting_for_ai_custom_prompt)
+async def process_ai_custom_prompt(message: Message, state: FSMContext):
+    custom_prompt = message.text.strip()
+    if not custom_prompt:
+        await message.answer("Please enter a non-empty custom prompt.")
+        return
+        
+    await state.update_data(custom_prompt=custom_prompt)
+    await state.set_state(CreateCardStates.waiting_for_ai_topic)
+    
+    await message.answer(
+        "📝 **AI Step 4: Enter Topic or Content**\n\n"
+        "Now enter the specific topic, word, or text for your card:",
+        reply_markup=get_cancel_keyboard(),
+        parse_mode="Markdown"
+    )
+
+@router.message(CreateCardStates.waiting_for_ai_topic)
+async def process_ai_topic(message: Message, state: FSMContext):
+    topic = message.text.strip()
+    if not topic:
+        await message.answer("Please enter a valid topic.")
+        return
+        
+    await state.update_data(topic=topic)
+    await generate_and_show_ai_preview(message, state)
+
+async def generate_and_show_ai_preview(message: Message, state: FSMContext):
+    data = await state.get_data()
+    preset_key = data.get("preset_key", "language")
+    preset_text = data.get("preset_text", "Default Preset")
+    topic = data.get("topic", "")
+    custom_prompt = data.get("custom_prompt")
+    category = data.get("category", "General")
+    
+    wait_msg = await message.answer("🤖 *Generating flashcard with AI... Please wait a moment.*", parse_mode="Markdown")
+    
+    try:
+        card_data = await ai_service.generate_ai_card(
+            preset_key=preset_key,
+            topic=topic,
+            custom_prompt=custom_prompt
+        )
+        question = card_data["question"]
+        answer = card_data["answer"]
+        
+        await state.update_data(question=question, answer=answer)
+        await state.set_state(CreateCardStates.waiting_for_ai_preview)
+        
+        # Delete status message
+        try:
+            await wait_msg.delete()
+        except Exception:
+            pass
+            
+        preview_text = (
+            "🤖 **AI Flashcard Preview**\n\n"
+            f"📁 **Category:** {category}\n"
+            f"🎯 **Preset:** {preset_text}\n\n"
+            f"❓ **Question:**\n{question}\n\n"
+            f"💡 **Answer:**\n{answer}\n\n"
+            "✨ *Would you like to save this card, edit it, or regenerate?*"
+        )
+        await message.answer(preview_text, reply_markup=get_ai_preview_keyboard(), parse_mode="Markdown")
+        
+    except Exception as e:
+        logger.exception("Error generating AI card")
+        try:
+            await wait_msg.delete()
+        except Exception:
+            pass
+            
+        await message.answer(
+            f"❌ **AI Generation Failed**\n\nError: `{str(e)}`\n\n"
+            "You can try again, enter a different topic, or cancel.",
+            reply_markup=get_cancel_keyboard(),
+            parse_mode="Markdown"
+        )
+
+# --- AI PREVIEW CALLBACK HANDLERS ---
+@router.callback_query(CreateCardStates.waiting_for_ai_preview, F.data == "ai_save")
+async def process_ai_save(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    category = data.get("category", "General")
+    question = data.get("question")
+    answer = data.get("answer")
+    
+    if not question or not answer:
+        await callback.answer("Error: Missing card content.", show_alert=True)
+        return
+        
+    card_id = database.add_card(
+        user_id=callback.from_user.id,
+        question=question,
+        answer=answer,
+        category=category
+    )
+    
+    await state.clear()
+    await callback.message.edit_text(
+        "🎉 **AI Card Saved Successfully!**\n\n"
+        f"**ID:** {card_id}\n"
+        f"**Category:** {category}\n"
+        f"**Question:** {question}\n"
+        f"**Answer:** {answer}\n\n"
+        "Saved to your flashcards pool!",
+        parse_mode="Markdown"
+    )
+    await callback.message.answer("Main Menu", reply_markup=get_main_keyboard())
+    await callback.answer()
+
+@router.callback_query(CreateCardStates.waiting_for_ai_preview, F.data == "ai_edit_q")
+async def start_edit_ai_question(callback: CallbackQuery, state: FSMContext):
+    await state.set_state(CreateCardStates.waiting_for_edit_question)
+    await callback.message.answer(
+        "✏️ **Edit Question**\n\nPlease type the updated **Question** text below:",
+        reply_markup=get_cancel_keyboard(),
+        parse_mode="Markdown"
+    )
+    await callback.answer()
+
+@router.callback_query(CreateCardStates.waiting_for_ai_preview, F.data == "ai_edit_a")
+async def start_edit_ai_answer(callback: CallbackQuery, state: FSMContext):
+    await state.set_state(CreateCardStates.waiting_for_edit_answer)
+    await callback.message.answer(
+        "✏️ **Edit Answer**\n\nPlease type the updated **Answer** text below:",
+        reply_markup=get_cancel_keyboard(),
+        parse_mode="Markdown"
+    )
+    await callback.answer()
+
+@router.callback_query(CreateCardStates.waiting_for_ai_preview, F.data == "ai_regen")
+async def process_ai_regenerate(callback: CallbackQuery, state: FSMContext):
+    await callback.answer("Regenerating AI card...")
+    await callback.message.delete()
+    await generate_and_show_ai_preview(callback.message, state)
+
+@router.callback_query(CreateCardStates.waiting_for_ai_preview, F.data == "ai_cancel")
+async def process_ai_cancel(callback: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await callback.message.edit_text("❌ AI card creation cancelled.")
+    await callback.message.answer("Main Menu", reply_markup=get_main_keyboard())
+    await callback.answer()
+
+# --- EDIT RESPONSES HANDLERS ---
+@router.message(CreateCardStates.waiting_for_edit_question)
+async def process_edited_question(message: Message, state: FSMContext):
+    new_q = message.text.strip()
+    if not new_q:
+        await message.answer("Please enter a valid non-empty question.")
+        return
+        
+    await state.update_data(question=new_q)
+    await state.set_state(CreateCardStates.waiting_for_ai_preview)
+    
+    data = await state.get_data()
+    category = data.get("category", "General")
+    preset_text = data.get("preset_text", "AI Card")
+    answer = data.get("answer", "")
+    
+    preview_text = (
+        "🤖 **AI Flashcard Preview (Updated Question)**\n\n"
+        f"📁 **Category:** {category}\n"
+        f"🎯 **Preset:** {preset_text}\n\n"
+        f"❓ **Question:**\n{new_q}\n\n"
+        f"💡 **Answer:**\n{answer}\n\n"
+        "✨ *Would you like to save this card, edit it further, or regenerate?*"
+    )
+    await message.answer(preview_text, reply_markup=get_ai_preview_keyboard(), parse_mode="Markdown")
+
+@router.message(CreateCardStates.waiting_for_edit_answer)
+async def process_edited_answer(message: Message, state: FSMContext):
+    new_a = message.text.strip()
+    if not new_a:
+        await message.answer("Please enter a valid non-empty answer.")
+        return
+        
+    await state.update_data(answer=new_a)
+    await state.set_state(CreateCardStates.waiting_for_ai_preview)
+    
+    data = await state.get_data()
+    category = data.get("category", "General")
+    preset_text = data.get("preset_text", "AI Card")
+    question = data.get("question", "")
+    
+    preview_text = (
+        "🤖 **AI Flashcard Preview (Updated Answer)**\n\n"
+        f"📁 **Category:** {category}\n"
+        f"🎯 **Preset:** {preset_text}\n\n"
+        f"❓ **Question:**\n{question}\n\n"
+        f"💡 **Answer:**\n{new_a}\n\n"
+        "✨ *Would you like to save this card, edit it further, or regenerate?*"
+    )
+    await message.answer(preview_text, reply_markup=get_ai_preview_keyboard(), parse_mode="Markdown")
+
+# --- LIST & DELETE CARDS HANDLERS ---
 @router.message(F.text == "📚 My Cards")
 @router.message(Command("list"))
 async def list_cards(message: Message):
@@ -119,7 +433,6 @@ async def list_cards(message: Message):
         
     response = "📚 **Your Learning Cards:**\n\n"
     
-    # Group cards by category for neat presentation
     by_category = {}
     for card in cards:
         cat = card["category"]
@@ -136,15 +449,12 @@ async def list_cards(message: Message):
             response += f"  {stats}\n"
             response += f"  🗑️ Delete: /delete_{card['id']}\n\n"
             
-    # Check if response fits inside a single message
     if len(response) > 4000:
-        # If it's too long, send in chunks
         for i in range(0, len(response), 4000):
             await message.answer(response[i:i+4000], parse_mode="Markdown")
     else:
         await message.answer(response, parse_mode="Markdown")
 
-# Handle dynamic delete commands like /delete_5
 @router.message(F.text.regexp(r"^/delete_(\d+)$"))
 async def process_delete_command(message: Message):
     match = re.match(r"^/delete_(\d+)$", message.text)

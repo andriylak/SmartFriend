@@ -16,12 +16,15 @@ async def cmd_start_or_help(message: Message, state: FSMContext):
     
     welcome_text = (
         "👋 **Welcome to the Learning Companion Bot!**\n\n"
-        "This bot is designed to help you study and retain knowledge using interactive flashcards/learning cards.\n\n"
+        "This bot is designed to help you study and retain knowledge using interactive flashcards.\n\n"
         "**Available Features:**\n"
-        "➕ **Create Card**: Create a new learning card with a question, answer, and optional category (default: 'General').\n"
-        "📚 **My Cards**: View and delete your existing learning cards.\n"
-        "🎯 **Study/Quiz**: Start a quiz. The bot will show a question, allow you to reveal the answer, and track your correct/incorrect attempts.\n"
-        "❌ **Cancel**: You can type `/cancel` or tap \"❌ Cancel\" at any time to cancel the current setup/quiz.\n\n"
+        "➕ **Create Card**: Create flashcards either **manually** or **assisted by AI**!\n"
+        "   • 🤖 **AI-Assisted**: Use pre-set prompts (e.g. *Language Learning*, *Definitions*, *Programming*, *Trivia*) or your own *Custom Prompt* to generate cards automatically!\n"
+        "   • ✏️ **Card Editing**: Preview AI-generated cards and edit Question or Answer before saving.\n"
+        "📚 **My Cards**: View, organize, and delete your flashcards by category.\n"
+        "🎯 **Study/Quiz**: Quiz yourself on specific categories or all flashcards.\n"
+        "❌ **Cancel**: Type `/cancel` or tap \"❌ Cancel\" at any time.\n\n"
+        "🔑 *Note: AI card creation requires setting `GEMINI_API_KEY` in `.env` file.*\n\n"
         "Use the menu below to get started!"
     )
     await message.answer(welcome_text, reply_markup=get_main_keyboard(), parse_mode="Markdown")
