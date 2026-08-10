@@ -6,7 +6,9 @@ An interactive and lightweight Telegram Bot written in Python using **aiogram v3
 
 ## 🚀 Features
 
-- ➕ **Create Card**: Step-by-step flashcard creation (Category ➡️ Question ➡️ Answer) using Finite State Machine (FSM).
+- ➕ **Create Card**: Create flashcards either **manually** or **assisted by AI**:
+  - 🤖 **AI-Assisted**: Uses Google Gemini API with preset prompts (e.g. *Language Learning*, *Definitions & Concepts*, *Programming & Syntax*, *General Knowledge*) or your own *Custom Prompt*.
+  - ✏️ **Card Editing**: Preview AI-generated cards and edit the Question or Answer before saving to your deck.
 - 📚 **My Cards**: View all your created cards grouped by category, showing correct/incorrect stats, with quick dynamic deletion commands (e.g. `/delete_5`).
 - 🎯 **Study/Quiz**: Starts an interactive quiz session where you can:
   - Choose a specific category or study all cards.
@@ -15,6 +17,16 @@ An interactive and lightweight Telegram Bot written in Python using **aiogram v3
   - Grade yourself with "Got it Right" or "Got it Wrong" inline buttons, which update your card statistics.
   - Load the next card seamlessly for rapid learning.
 - ❌ **Cancel Command**: Tap **❌ Cancel** or type `/cancel` at any point to cancel active card creation or study session.
+
+---
+
+## 🔑 Environment Setup (.env)
+
+Create a `.env` file in the root directory:
+```env
+TELEGRAM_BOT_TOKEN=your_telegram_bot_token_here
+GEMINI_API_KEY=your_google_gemini_api_key_here
+```
 
 ---
 
