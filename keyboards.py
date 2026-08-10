@@ -42,6 +42,42 @@ def get_delete_card_keyboard(card_id: int):
     builder.add(InlineKeyboardButton(text="🗑️ Delete Card", callback_data=f"delete_{card_id}"))
     return builder.as_markup()
 
+def get_card_creation_mode_keyboard():
+    keyboard = ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="🤖 AI-Assisted Card"), KeyboardButton(text="✍️ Manual Card")],
+            [KeyboardButton(text="❌ Cancel")]
+        ],
+        resize_keyboard=True,
+        placeholder="Choose creation method..."
+    )
+    return keyboard
+
+def get_ai_prompt_presets_keyboard():
+    keyboard = ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="🌐 Language Learning"), KeyboardButton(text="📚 Definitions & Concepts")],
+            [KeyboardButton(text="💻 Programming & Syntax"), KeyboardButton(text="🧠 General Knowledge")],
+            [KeyboardButton(text="✏️ Custom Prompt")],
+            [KeyboardButton(text="❌ Cancel")]
+        ],
+        resize_keyboard=True,
+        placeholder="Select AI prompt preset..."
+    )
+    return keyboard
+
+def get_ai_preview_keyboard():
+    builder = InlineKeyboardBuilder()
+    builder.add(
+        InlineKeyboardButton(text="✅ Save Card", callback_data="ai_save"),
+        InlineKeyboardButton(text="✏️ Edit Question", callback_data="ai_edit_q"),
+        InlineKeyboardButton(text="✏️ Edit Answer", callback_data="ai_edit_a"),
+        InlineKeyboardButton(text="🔄 Regenerate", callback_data="ai_regen"),
+        InlineKeyboardButton(text="❌ Cancel", callback_data="ai_cancel")
+    )
+    builder.adjust(1, 2, 2)
+    return builder.as_markup()
+
 def get_categories_keyboard(categories: list):
     builder = InlineKeyboardBuilder()
     # Add an option to quiz from all categories
@@ -53,3 +89,4 @@ def get_categories_keyboard(categories: list):
         
     builder.adjust(1) # one button per row
     return builder.as_markup()
+
