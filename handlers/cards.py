@@ -1,5 +1,6 @@
 import re
 import logging
+from html import escape
 from aiogram import Router, F
 from aiogram.filters import Command
 from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, CallbackQuery
@@ -465,12 +466,13 @@ async def list_cards(message: Message):
     if not cards:
         await message.answer(
             "📭 You don't have any learning cards yet!\n\n"
-            "Tap **➕ Create Card** to start creating your first flashcard.",
-            reply_markup=get_main_keyboard()
+            "Tap <b>➕ Create Card</b> to start creating your first flashcard.",
+            reply_markup=get_main_keyboard(),
+            parse_mode="HTML"
         )
         return
         
-    response = "📚 **Your Learning Cards:**\n\n"
+    response = "📚 <b>Your Learning Cards:</b>\n\n"
     
     by_category = {}
     for card in cards:
@@ -480,19 +482,24 @@ async def list_cards(message: Message):
         by_category[cat].append(card)
         
     for cat, cat_cards in by_category.items():
-        response += f"📁 **{cat}** ({len(cat_cards)} cards):\n"
+        cat_escaped = escape(cat)
+        response += f"📁 <b>{cat_escaped}</b> ({len(cat_cards)} cards):\n"
         for card in cat_cards:
+            q_escaped = escape(card['question'])
+            a_escaped = escape(card['answer'])
             stats = f"🎯 Stats: {card['correct_count']}✅ / {card['incorrect_count']}❌"
-            response += f"• **Q:** {card['question']}\n"
-            response += f"  **A:** {card['answer']}\n"
+            response += f"• <b>Q:</b> {q_escaped}\n"
+            response += f"  <b>A:</b> {a_escaped}\n"
             response += f"  {stats}\n"
             response += f"  🗑️ Delete: /delete_{card['id']}\n\n"
             
-    if len(response) > 4000:
-        for i in range(0, len(response), 4000):
-            await message.answer(response[i:i+4000], parse_mode="Markdown")
-    else:
-        await message.answer(response, parse_mode="Markdown")
+    chunks = [response[i:i+4000] for i in range(0, len(response), 4000)]
+    for chunk in chunks:
+        try:
+            await message.answer(chunk, parse_mode="HTML")
+        except Exception as err:
+            logger.warning(f"Failed to send HTML formatted list_cards message: {err}. Falling back to plain text.")
+            await message.answer(chunk)
 
 @router.message(F.text.regexp(r"^/delete_(\d+)$"))
 async def process_delete_command(message: Message):

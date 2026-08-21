@@ -1,3 +1,4 @@
+from html import escape
 from aiogram import Router, F
 from aiogram.filters import Command
 from aiogram.types import Message, CallbackQuery
@@ -28,17 +29,19 @@ async def start_quiz(message: Message, state: FSMContext):
     if not categories:
         await message.answer(
             "📭 You don't have any learning cards to study yet!\n\n"
-            "Please create some cards first using **➕ Create Card**.",
-            reply_markup=get_main_keyboard()
+            "Please create some cards first using <b>➕ Create Card</b>.",
+            reply_markup=get_main_keyboard(),
+            parse_mode="HTML"
         )
         return
         
     await state.set_state(QuizStates.selecting_category)
     
     await message.answer(
-        "🎯 **Study Mode**\n\n"
+        "🎯 <b>Study Mode</b>\n\n"
         "Please select a category you would like to study:",
-        reply_markup=get_categories_keyboard(categories)
+        reply_markup=get_categories_keyboard(categories),
+        parse_mode="HTML"
     )
 
 @router.callback_query(QuizStates.selecting_category, F.data.startswith("quiz_cat_"))
@@ -49,12 +52,12 @@ async def select_category(callback: CallbackQuery, state: FSMContext):
     await state.update_data(active_category=category)
     await state.set_state(QuizStates.studying)
     
-    # Send a separate message with the first card and transition keyboard to 'Cancel'
+    cat_display = escape(category) if category else 'All'
     await callback.message.answer(
-        f"🏁 Starting study session! Category: *{category if category else 'All'}*\n"
-        "You can tap **❌ Cancel** at any time to end the session.",
+        f"🏁 Starting study session! Category: <b>{cat_display}</b>\n"
+        "You can tap <b>❌ Cancel</b> at any time to end the session.",
         reply_markup=get_cancel_keyboard(),
-        parse_mode="Markdown"
+        parse_mode="HTML"
     )
     
     # Fetch first card
@@ -71,17 +74,32 @@ async def send_next_card(message: Message, user_id: int, category: str):
         return
         
     stats = f"({card['correct_count']}✅ / {card['incorrect_count']}❌)"
+    q_escaped = escape(card['question'])
+    cat_escaped = escape(card['category'])
+    
     card_text = (
-        f"📝 **Quiz Card** (ID: {card['id']}) {stats}\n"
-        f"📁 Category: *{card['category']}*\n\n"
-        f"❓ **Question:**\n"
-        f"_{card['question']}_"
+        f"📝 <b>Quiz Card</b> (ID: {card['id']}) {stats}\n"
+        f"📁 Category: <i>{cat_escaped}</i>\n\n"
+        f"❓ <b>Question:</b>\n"
+        f"<i>{q_escaped}</i>"
     )
-    await message.answer(
-        card_text,
-        reply_markup=get_reveal_keyboard(card["id"]),
-        parse_mode="Markdown"
-    )
+    try:
+        await message.answer(
+            card_text,
+            reply_markup=get_reveal_keyboard(card["id"]),
+            parse_mode="HTML"
+        )
+    except Exception:
+        plain_text = (
+            f"📝 Quiz Card (ID: {card['id']}) {stats}\n"
+            f"📁 Category: {card['category']}\n\n"
+            f"❓ Question:\n"
+            f"{card['question']}"
+        )
+        await message.answer(
+            plain_text,
+            reply_markup=get_reveal_keyboard(card["id"])
+        )
 
 @router.callback_query(QuizStates.studying, F.data.startswith("reveal_"))
 async def reveal_answer(callback: CallbackQuery, state: FSMContext):
@@ -98,20 +116,39 @@ async def reveal_answer(callback: CallbackQuery, state: FSMContext):
         return
         
     stats = f"({card['correct_count']}✅ / {card['incorrect_count']}❌)"
+    q_escaped = escape(card['question'])
+    a_escaped = escape(card['answer'])
+    cat_escaped = escape(card['category'])
+    
     revealed_text = (
-        f"📝 **Quiz Card** (ID: {card['id']}) {stats}\n"
-        f"📁 Category: *{card['category']}*\n\n"
-        f"❓ **Question:**\n"
-        f"_{card['question']}_\n\n"
-        f"💡 **Answer:**\n"
-        f"**{card['answer']}**\n\n"
+        f"📝 <b>Quiz Card</b> (ID: {card['id']}) {stats}\n"
+        f"📁 Category: <i>{cat_escaped}</i>\n\n"
+        f"❓ <b>Question:</b>\n"
+        f"<i>{q_escaped}</i>\n\n"
+        f"💡 <b>Answer:</b>\n"
+        f"<b>{a_escaped}</b>\n\n"
         "How did you do?"
     )
-    await callback.message.edit_text(
-        revealed_text,
-        reply_markup=get_evaluation_keyboard(card_id),
-        parse_mode="Markdown"
-    )
+    try:
+        await callback.message.edit_text(
+            revealed_text,
+            reply_markup=get_evaluation_keyboard(card_id),
+            parse_mode="HTML"
+        )
+    except Exception:
+        plain_text = (
+            f"📝 Quiz Card (ID: {card['id']}) {stats}\n"
+            f"📁 Category: {card['category']}\n\n"
+            f"❓ Question:\n"
+            f"{card['question']}\n\n"
+            f"💡 Answer:\n"
+            f"{card['answer']}\n\n"
+            "How did you do?"
+        )
+        await callback.message.edit_text(
+            plain_text,
+            reply_markup=get_evaluation_keyboard(card_id)
+        )
     await callback.answer()
 
 @router.callback_query(QuizStates.studying, F.data.startswith("grade_"))
@@ -131,18 +168,30 @@ async def process_grading(callback: CallbackQuery, state: FSMContext):
     result_emoji = "✅" if correct else "❌"
     
     if card:
+        q_escaped = escape(card['question'])
+        a_escaped = escape(card['answer'])
         summary_text = (
-            f"👍 **Response Recorded!**\n\n"
-            f"**Question:** {card['question']}\n"
-            f"**Answer:** {card['answer']}\n\n"
+            f"👍 <b>Response Recorded!</b>\n\n"
+            f"<b>Question:</b> {q_escaped}\n"
+            f"<b>Answer:</b> {a_escaped}\n\n"
             f"Your grade: {result_emoji}\n"
             f"New Stats: {card['correct_count']}✅ / {card['incorrect_count']}❌"
         )
+        try:
+            await callback.message.edit_text(summary_text, parse_mode="HTML")
+        except Exception:
+            plain_text = (
+                f"👍 Response Recorded!\n\n"
+                f"Question: {card['question']}\n"
+                f"Answer: {card['answer']}\n\n"
+                f"Your grade: {result_emoji}\n"
+                f"New Stats: {card['correct_count']}✅ / {card['incorrect_count']}❌"
+            )
+            await callback.message.edit_text(plain_text)
     else:
         summary_text = f"👍 Response recorded as {result_emoji}!"
+        await callback.message.edit_text(summary_text)
         
-    await callback.message.edit_text(summary_text, parse_mode="Markdown")
-    
     # Now, check if we should send the next card
     state_data = await state.get_data()
     active_category = state_data.get("active_category")
