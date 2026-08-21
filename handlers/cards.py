@@ -17,7 +17,8 @@ from keyboards import (
     get_ai_prompt_presets_keyboard,
     get_target_languages_keyboard,
     get_ai_preview_keyboard,
-    get_category_selection_reply_keyboard
+    get_category_selection_reply_keyboard,
+    get_ai_topic_keyboard
 )
 
 logger = logging.getLogger(__name__)
@@ -104,6 +105,14 @@ async def process_creation_mode(message: Message, state: FSMContext):
     else:
         await message.answer("Please select an option from the menu: 🤖 **AI-Assisted Card** or ✍️ **Manual Card**.")
 
+PRESET_NAME_MAP = {
+    "language": "🌐 Language Learning",
+    "definitions": "📚 Definitions & Concepts",
+    "programming": "💻 Programming & Syntax",
+    "trivia": "🧠 General Knowledge",
+    "custom": "✏️ Custom Prompt"
+}
+
 # Step 1: Process Category (for both Manual and AI)
 @router.message(CreateCardStates.waiting_for_category)
 async def process_category(message: Message, state: FSMContext):
@@ -117,13 +126,47 @@ async def process_category(message: Message, state: FSMContext):
     is_ai = data.get("is_ai", False)
     
     if is_ai:
-        await state.set_state(CreateCardStates.waiting_for_ai_prompt_preset)
-        await message.answer(
-            f"🎯 **AI Step 2: Choose Prompt Type** (Category: *{category}*)\n\n"
-            "Select one of the default AI prompt presets below, or choose ✏️ **Custom Prompt** to write your own instructions:",
-            reply_markup=get_ai_prompt_presets_keyboard(),
-            parse_mode="Markdown"
-        )
+        user_id = message.from_user.id
+        deck_setting = database.get_deck_setting(user_id, category)
+        
+        if deck_setting:
+            preset_key = deck_setting["preset_key"]
+            target_language = deck_setting.get("target_language")
+            custom_prompt = deck_setting.get("custom_prompt")
+            preset_text = PRESET_NAME_MAP.get(preset_key, "AI Card")
+            
+            await state.update_data(
+                preset_key=preset_key,
+                preset_text=preset_text,
+                target_language=target_language,
+                custom_prompt=custom_prompt,
+                has_saved_prompt=True
+            )
+            await state.set_state(CreateCardStates.waiting_for_ai_topic)
+            
+            if preset_key == "language" and target_language:
+                setting_desc = f"*{preset_text}* (Translate To: *{target_language}*)"
+            elif preset_key == "custom" and custom_prompt:
+                setting_desc = f"*{preset_text}* (*{custom_prompt}*)"
+            else:
+                setting_desc = f"*{preset_text}*"
+                
+            await message.answer(
+                f"🤖 **AI Flashcard Assistant** (Deck: *{category}*)\n\n"
+                f"📌 **Saved Deck Setting:** {setting_desc}\n\n"
+                "What word, phrase, or topic do you want the AI to create a card for?\n\n"
+                "*(Tap **⚙️ Change Deck Prompt** below if you want to pick a different prompt for this deck)*",
+                reply_markup=get_ai_topic_keyboard(has_saved_prompt=True),
+                parse_mode="Markdown"
+            )
+        else:
+            await state.set_state(CreateCardStates.waiting_for_ai_prompt_preset)
+            await message.answer(
+                f"🎯 **AI Step 2: Choose Prompt Type** (Category: *{category}*)\n\n"
+                "Select one of the default AI prompt presets below, or choose ✏️ **Custom Prompt** to write your own instructions:",
+                reply_markup=get_ai_prompt_presets_keyboard(),
+                parse_mode="Markdown"
+            )
     else:
         await state.set_state(CreateCardStates.waiting_for_question)
         await message.answer(
@@ -221,13 +264,18 @@ async def process_ai_preset(message: Message, state: FSMContext):
             parse_mode="Markdown"
         )
     else:
+        data = await state.get_data()
+        category = data.get("category", "General")
+        database.save_deck_setting(message.from_user.id, category, preset_key)
+        await state.update_data(has_saved_prompt=True)
+        
         await state.set_state(CreateCardStates.waiting_for_ai_topic)
         await message.answer(
             f"📝 **AI Step 3: Enter Topic or Phrase**\n\n"
             f"Selected Preset: *{preset_text}*\n\n"
             "What word, phrase, or topic do you want the AI to create a card for? "
             "(e.g., *Photosynthesis*, *Python list comprehension*, *World War II*)",
-            reply_markup=get_cancel_keyboard(),
+            reply_markup=get_ai_topic_keyboard(has_saved_prompt=True),
             parse_mode="Markdown"
         )
 
@@ -243,6 +291,12 @@ async def process_target_language(message: Message, state: FSMContext):
     target_language = clean_lang if clean_lang else raw_lang
     
     await state.update_data(target_language=target_language)
+    
+    data = await state.get_data()
+    category = data.get("category", "General")
+    database.save_deck_setting(message.from_user.id, category, "language", target_language=target_language)
+    await state.update_data(has_saved_prompt=True)
+    
     await state.set_state(CreateCardStates.waiting_for_ai_topic)
     
     await message.answer(
@@ -251,7 +305,7 @@ async def process_target_language(message: Message, state: FSMContext):
         f"Translate To: *{target_language}*\n\n"
         "What word, phrase, or sentence do you want to learn? "
         "(e.g., *el gato*, *la manzana*, *ordering food in Spanish*)",
-        reply_markup=get_cancel_keyboard(),
+        reply_markup=get_ai_topic_keyboard(has_saved_prompt=True),
         parse_mode="Markdown"
     )
 
@@ -263,18 +317,37 @@ async def process_ai_custom_prompt(message: Message, state: FSMContext):
         return
         
     await state.update_data(custom_prompt=custom_prompt)
+    
+    data = await state.get_data()
+    category = data.get("category", "General")
+    database.save_deck_setting(message.from_user.id, category, "custom", custom_prompt=custom_prompt)
+    await state.update_data(has_saved_prompt=True)
+    
     await state.set_state(CreateCardStates.waiting_for_ai_topic)
     
     await message.answer(
         "📝 **AI Step 4: Enter Topic or Content**\n\n"
         "Now enter the specific topic, word, or text for your card:",
-        reply_markup=get_cancel_keyboard(),
+        reply_markup=get_ai_topic_keyboard(has_saved_prompt=True),
         parse_mode="Markdown"
     )
 
 @router.message(CreateCardStates.waiting_for_ai_topic)
 async def process_ai_topic(message: Message, state: FSMContext):
     topic = message.text.strip()
+    
+    if topic == "⚙️ Change Deck Prompt":
+        data = await state.get_data()
+        category = data.get("category", "General")
+        await state.set_state(CreateCardStates.waiting_for_ai_prompt_preset)
+        await message.answer(
+            f"⚙️ **Change Deck Prompt** (Category: *{category}*)\n\n"
+            "Select a new prompt preset below to update the AI instructions for this deck:",
+            reply_markup=get_ai_prompt_presets_keyboard(),
+            parse_mode="Markdown"
+        )
+        return
+        
     if not topic:
         await message.answer("Please enter a valid topic.")
         return
