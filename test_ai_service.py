@@ -43,5 +43,14 @@ Hope that helps!"""
         self.assertIn("trivia", PRESET_PROMPTS)
         self.assertIn("custom", PRESET_PROMPTS)
 
+    def test_language_preset_prompt_formatting(self):
+        instruction = PRESET_PROMPTS["language"]["system_instruction"].format(
+            topic="el gato",
+            target_language="Ukrainian"
+        )
+        self.assertIn("el gato", instruction)
+        self.assertIn("Target Translation Language: Ukrainian", instruction)
+        self.assertIn("Ukrainian", instruction)
+
 if __name__ == "__main__":
     unittest.main()
