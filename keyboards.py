@@ -1,5 +1,5 @@
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
-from aiogram.utils.keyboard import InlineKeyboardBuilder
+from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
 
 def get_main_keyboard():
     keyboard = ReplyKeyboardMarkup(
@@ -103,4 +103,22 @@ def get_categories_keyboard(categories: list):
         
     builder.adjust(1) # one button per row
     return builder.as_markup()
+
+def get_category_selection_reply_keyboard(categories: list):
+    builder = ReplyKeyboardBuilder()
+    
+    cats_to_show = list(categories)
+    if "General" not in cats_to_show:
+        cats_to_show.insert(0, "General")
+        
+    for cat in cats_to_show:
+        builder.add(KeyboardButton(text=cat))
+        
+    builder.adjust(2)
+    builder.row(KeyboardButton(text="❌ Cancel"))
+    
+    return builder.as_markup(
+        resize_keyboard=True,
+        placeholder="Select existing deck or type new deck name..."
+    )
 
