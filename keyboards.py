@@ -66,6 +66,20 @@ def get_ai_prompt_presets_keyboard():
     )
     return keyboard
 
+def get_target_languages_keyboard():
+    keyboard = ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="🇬🇧 English"), KeyboardButton(text="🇺🇦 Ukrainian")],
+            [KeyboardButton(text="🇪🇸 Spanish"), KeyboardButton(text="🇩🇪 German")],
+            [KeyboardButton(text="🇫🇷 French"), KeyboardButton(text="🇮🇹 Italian")],
+            [KeyboardButton(text="🇵🇱 Polish")],
+            [KeyboardButton(text="❌ Cancel")]
+        ],
+        resize_keyboard=True,
+        placeholder="Choose or type target language..."
+    )
+    return keyboard
+
 def get_ai_preview_keyboard():
     builder = InlineKeyboardBuilder()
     builder.add(
