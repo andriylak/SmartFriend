@@ -122,3 +122,15 @@ def get_category_selection_reply_keyboard(categories: list):
         placeholder="Select existing deck or type new deck name..."
     )
 
+def get_ai_topic_keyboard(has_saved_prompt: bool = False):
+    buttons = []
+    if has_saved_prompt:
+        buttons.append([KeyboardButton(text="⚙️ Change Deck Prompt")])
+    buttons.append([KeyboardButton(text="❌ Cancel")])
+    
+    return ReplyKeyboardMarkup(
+        keyboard=buttons,
+        resize_keyboard=True,
+        placeholder="Enter topic, word, or phrase..."
+    )
+
