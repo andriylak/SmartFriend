@@ -14,6 +14,7 @@ from keyboards import (
     get_cancel_keyboard,
     get_card_creation_mode_keyboard,
     get_ai_prompt_presets_keyboard,
+    get_target_languages_keyboard,
     get_ai_preview_keyboard
 )
 
@@ -27,6 +28,7 @@ class CreateCardStates(StatesGroup):
     waiting_for_question = State()
     waiting_for_answer = State()
     waiting_for_ai_prompt_preset = State()
+    waiting_for_target_language = State()
     waiting_for_ai_custom_prompt = State()
     waiting_for_ai_topic = State()
     waiting_for_ai_preview = State()
@@ -201,7 +203,16 @@ async def process_ai_preset(message: Message, state: FSMContext):
         
     await state.update_data(preset_key=preset_key, preset_text=preset_text)
     
-    if preset_key == "custom":
+    if preset_key == "language":
+        await state.set_state(CreateCardStates.waiting_for_target_language)
+        await message.answer(
+            "🌐 **AI Step 3: Choose Target Translation Language**\n\n"
+            "What language do you want the word, phrase, and example sentences translated **TO**?\n"
+            "(e.g., *English*, *Ukrainian*, *Spanish*, *German*, *French*)",
+            reply_markup=get_target_languages_keyboard(),
+            parse_mode="Markdown"
+        )
+    elif preset_key == "custom":
         await state.set_state(CreateCardStates.waiting_for_ai_custom_prompt)
         await message.answer(
             "✏️ **AI Step 3: Your Custom Prompt**\n\n"
@@ -216,10 +227,34 @@ async def process_ai_preset(message: Message, state: FSMContext):
             f"📝 **AI Step 3: Enter Topic or Phrase**\n\n"
             f"Selected Preset: *{preset_text}*\n\n"
             "What word, phrase, or topic do you want the AI to create a card for? "
-            "(e.g., *Spanish food vocabulary*, *Photosynthesis*, *Python list comprehension*)",
+            "(e.g., *Photosynthesis*, *Python list comprehension*, *World War II*)",
             reply_markup=get_cancel_keyboard(),
             parse_mode="Markdown"
         )
+
+@router.message(CreateCardStates.waiting_for_target_language)
+async def process_target_language(message: Message, state: FSMContext):
+    raw_lang = message.text.strip()
+    if not raw_lang:
+        await message.answer("Please enter or select a valid target language.")
+        return
+        
+    # Remove emoji flag icons if user clicked keyboard button (e.g. "🇬🇧 English" -> "English")
+    clean_lang = re.sub(r"^[^\w\s]+", "", raw_lang).strip()
+    target_language = clean_lang if clean_lang else raw_lang
+    
+    await state.update_data(target_language=target_language)
+    await state.set_state(CreateCardStates.waiting_for_ai_topic)
+    
+    await message.answer(
+        "📝 **AI Step 4: Enter Topic, Word, or Phrase**\n\n"
+        f"Selected Preset: *🌐 Language Learning*\n"
+        f"Translate To: *{target_language}*\n\n"
+        "What word, phrase, or sentence do you want to learn? "
+        "(e.g., *el gato*, *la manzana*, *ordering food in Spanish*)",
+        reply_markup=get_cancel_keyboard(),
+        parse_mode="Markdown"
+    )
 
 @router.message(CreateCardStates.waiting_for_ai_custom_prompt)
 async def process_ai_custom_prompt(message: Message, state: FSMContext):
@@ -254,6 +289,7 @@ async def generate_and_show_ai_preview(message: Message, state: FSMContext):
     preset_text = data.get("preset_text", "Default Preset")
     topic = data.get("topic", "")
     custom_prompt = data.get("custom_prompt")
+    target_language = data.get("target_language")
     category = data.get("category", "General")
     
     wait_msg = await message.answer("🤖 *Generating flashcard with AI... Please wait a moment.*", parse_mode="Markdown")
@@ -262,7 +298,8 @@ async def generate_and_show_ai_preview(message: Message, state: FSMContext):
         card_data = await ai_service.generate_ai_card(
             preset_key=preset_key,
             topic=topic,
-            custom_prompt=custom_prompt
+            custom_prompt=custom_prompt,
+            target_language=target_language
         )
         question = card_data["question"]
         answer = card_data["answer"]
@@ -276,10 +313,12 @@ async def generate_and_show_ai_preview(message: Message, state: FSMContext):
         except Exception:
             pass
             
+        target_lang_str = f"🌐 **Translate To:** {target_language}\n" if preset_key == "language" and target_language else ""
         preview_text = (
             "🤖 **AI Flashcard Preview**\n\n"
             f"📁 **Category:** {category}\n"
-            f"🎯 **Preset:** {preset_text}\n\n"
+            f"🎯 **Preset:** {preset_text}\n"
+            f"{target_lang_str}\n"
             f"❓ **Question:**\n{question}\n\n"
             f"💡 **Answer:**\n{answer}\n\n"
             "✨ *Would you like to save this card, edit it, or regenerate?*"
