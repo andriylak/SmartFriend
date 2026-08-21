@@ -16,7 +16,8 @@ from keyboards import (
     get_card_creation_mode_keyboard,
     get_ai_prompt_presets_keyboard,
     get_target_languages_keyboard,
-    get_ai_preview_keyboard
+    get_ai_preview_keyboard,
+    get_category_selection_reply_keyboard
 )
 
 logger = logging.getLogger(__name__)
@@ -54,22 +55,28 @@ async def start_create_card(message: Message, state: FSMContext):
 @router.message(CreateCardStates.waiting_for_mode)
 async def process_creation_mode(message: Message, state: FSMContext):
     choice = message.text.strip()
+    user_categories = database.get_user_categories(message.from_user.id)
+    category_kb = get_category_selection_reply_keyboard(user_categories)
+    
+    if user_categories:
+        deck_list_str = "\n".join(f"• *{cat}*" for cat in user_categories)
+        prompt_intro = (
+            "📁 **Select or Enter Category / Deck**\n\n"
+            f"**Your Existing Decks:**\n{deck_list_str}\n\n"
+            "Choose an existing deck from the keyboard below, or type a new deck name:"
+        )
+    else:
+        prompt_intro = (
+            "📁 **Category / Deck**\n\n"
+            "Please enter a category/deck for your card (e.g., *Math*, *Python*, *Spanish*), or tap **General** to use default."
+        )
     
     if choice == "✍️ Manual Card":
         await state.update_data(is_ai=False)
         await state.set_state(CreateCardStates.waiting_for_category)
         
-        category_kb = ReplyKeyboardMarkup(
-            keyboard=[
-                [KeyboardButton(text="General")],
-                [KeyboardButton(text="❌ Cancel")]
-            ],
-            resize_keyboard=True,
-            placeholder="Enter category name or tap 'General'..."
-        )
         await message.answer(
-            "📁 **Category**\n\n"
-            "Please enter a category for your card (e.g., *Math*, *Python*, *Spanish*), or tap **General** to use default.",
+            prompt_intro,
             reply_markup=category_kb,
             parse_mode="Markdown"
         )
@@ -89,17 +96,8 @@ async def process_creation_mode(message: Message, state: FSMContext):
         await state.update_data(is_ai=True)
         await state.set_state(CreateCardStates.waiting_for_category)
         
-        category_kb = ReplyKeyboardMarkup(
-            keyboard=[
-                [KeyboardButton(text="General")],
-                [KeyboardButton(text="❌ Cancel")]
-            ],
-            resize_keyboard=True,
-            placeholder="Enter deck/category name or tap 'General'..."
-        )
         await message.answer(
-            "🤖 **AI Flashcard Assistant - Step 1: Category**\n\n"
-            "Enter a category/deck for your AI-generated card (e.g., *Spanish*, *History*, *Python*), or tap **General**.",
+            f"🤖 **AI Flashcard Assistant - Step 1: Category**\n\n{prompt_intro}",
             reply_markup=category_kb,
             parse_mode="Markdown"
         )
