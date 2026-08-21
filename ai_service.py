@@ -15,11 +15,12 @@ PRESET_PROMPTS = {
         "title": "🌐 Language Learning",
         "system_instruction": (
             "You are an expert language tutor. Create a high-quality flashcard for learning vocabulary, phrases, or grammar.\n"
-            "Topic / Prompt: {topic}\n"
+            "Topic / Word / Phrase: {topic}\n"
+            "Target Translation Language: {target_language}\n"
             "Format requirements:\n"
             "Return ONLY a JSON object with keys 'question' and 'answer'.\n"
-            "'question': The word, phrase, or sentence in the target language (or translation request).\n"
-            "'answer': The translation, pronunciation/phonetics (if relevant), and a clear example sentence with translation."
+            "'question': The word, phrase, or sentence in the learning language.\n"
+            "'answer': The direct translation of the word/phrase into {target_language}, pronunciation/phonetics (if helpful), and an example sentence in the learning language with its translation in {target_language}."
         )
     },
     "definitions": {
@@ -112,7 +113,8 @@ def parse_card_json(raw_text: str) -> Dict[str, str]:
 async def generate_ai_card(
     preset_key: str,
     topic: str,
-    custom_prompt: Optional[str] = None
+    custom_prompt: Optional[str] = None,
+    target_language: Optional[str] = None
 ) -> Dict[str, str]:
     """
     Calls Google Gemini API to generate a flashcard question and answer.
@@ -126,11 +128,17 @@ async def generate_ai_card(
         )
 
     preset_info = PRESET_PROMPTS.get(preset_key, PRESET_PROMPTS["custom"])
+    target_lang = target_language or "English"
     
     if preset_key == "custom" and custom_prompt:
         instruction = preset_info["system_instruction"].format(
             custom_prompt=custom_prompt,
             topic=topic
+        )
+    elif preset_key == "language":
+        instruction = preset_info["system_instruction"].format(
+            topic=topic,
+            target_language=target_lang
         )
     else:
         instruction = preset_info["system_instruction"].format(
