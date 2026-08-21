@@ -106,5 +106,25 @@ class TestDatabase(unittest.TestCase):
         categories = database.get_user_categories(user_id)
         self.assertEqual(categories, ["History", "Math"])
 
+    def test_deck_settings(self):
+        user_id = 44444
+        category = "Spanish"
+        
+        # Initially None
+        setting = database.get_deck_setting(user_id, category)
+        self.assertIsNone(setting)
+        
+        # Save setting
+        database.save_deck_setting(user_id, category, "language", target_language="English")
+        setting = database.get_deck_setting(user_id, category)
+        self.assertIsNotNone(setting)
+        self.assertEqual(setting["preset_key"], "language")
+        self.assertEqual(setting["target_language"], "English")
+        
+        # Update setting (ON CONFLICT)
+        database.save_deck_setting(user_id, category, "language", target_language="Ukrainian")
+        updated = database.get_deck_setting(user_id, category)
+        self.assertEqual(updated["target_language"], "Ukrainian")
+
 if __name__ == "__main__":
     unittest.main()
