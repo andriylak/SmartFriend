@@ -18,6 +18,17 @@ def init_db():
             incorrect_count INTEGER DEFAULT 0
         )
     """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS deck_settings (
+            user_id INTEGER NOT NULL,
+            category TEXT NOT NULL,
+            preset_key TEXT NOT NULL,
+            target_language TEXT,
+            custom_prompt TEXT,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (user_id, category)
+        )
+    """)
     conn.commit()
     conn.close()
 
@@ -118,3 +129,38 @@ def get_user_categories(user_id: int):
     rows = cursor.fetchall()
     conn.close()
     return [row[0] for row in rows]
+
+def save_deck_setting(user_id: int, category: str, preset_key: str, target_language: str = None, custom_prompt: str = None):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        INSERT INTO deck_settings (user_id, category, preset_key, target_language, custom_prompt, updated_at)
+        VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(user_id, category) DO UPDATE SET
+            preset_key=excluded.preset_key,
+            target_language=excluded.target_language,
+            custom_prompt=excluded.custom_prompt,
+            updated_at=CURRENT_TIMESTAMP
+        """,
+        (user_id, category, preset_key, target_language, custom_prompt)
+    )
+    conn.commit()
+    conn.close()
+
+def get_deck_setting(user_id: int, category: str):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT preset_key, target_language, custom_prompt FROM deck_settings WHERE user_id = ? AND category = ?",
+        (user_id, category)
+    )
+    row = cursor.fetchone()
+    conn.close()
+    if row:
+        return {
+            "preset_key": row[0],
+            "target_language": row[1],
+            "custom_prompt": row[2]
+        }
+    return None
