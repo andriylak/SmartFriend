@@ -41,6 +41,9 @@ class CreateCardStates(StatesGroup):
     waiting_for_edit_question = State()
     waiting_for_edit_answer = State()
 
+class ListCardsStates(StatesGroup):
+    browsing_deck = State()
+
 # Step 0: Start creation process
 @router.message(F.text == "➕ Create Card")
 @router.message(Command("create"))
@@ -539,9 +542,11 @@ def format_card_page_text(cards: list, category_name: str, page: int, total_page
     
     if category_name != "all":
         cat_escaped = escape(category_name)
-        text = f"📚 <b>Deck: {cat_escaped}</b> ({len(cards)} cards - Page {page}/{total_pages})\n\n"
+        text = f"📚 <b>Deck: {cat_escaped}</b> ({len(cards)} cards - Page {page}/{total_pages})\n"
     else:
-        text = f"📚 <b>All Learning Cards</b> ({len(cards)} cards - Page {page}/{total_pages})\n\n"
+        text = f"📚 <b>All Learning Cards</b> ({len(cards)} cards - Page {page}/{total_pages})\n"
+        
+    text += "🔍 <i>Type any word or phrase to search cards in this deck!</i>\n\n"
         
     for card in page_cards:
         q_escaped = escape(card['question'])
@@ -558,7 +563,8 @@ def format_card_page_text(cards: list, category_name: str, page: int, total_page
 # --- LIST & DELETE CARDS HANDLERS ---
 @router.message(F.text == "📚 My Cards")
 @router.message(Command("list"))
-async def list_cards(message: Message):
+async def list_cards(message: Message, state: FSMContext):
+    await state.clear()
     user_id = message.from_user.id
     categories = database.get_user_categories(user_id)
     
@@ -579,7 +585,7 @@ async def list_cards(message: Message):
     )
 
 @router.callback_query(F.data.startswith("list_cat_"))
-async def process_list_category_selection(callback: CallbackQuery):
+async def process_list_category_selection(callback: CallbackQuery, state: FSMContext):
     category_data = callback.data.split("list_cat_")[1]
     user_id = callback.from_user.id
     
@@ -595,6 +601,9 @@ async def process_list_category_selection(callback: CallbackQuery):
         return
 
     cat_key = category_data
+    await state.set_state(ListCardsStates.browsing_deck)
+    await state.update_data(active_category=cat_key)
+    
     total_pages = math.ceil(len(cards) / CARDS_PER_PAGE)
     current_page = 1
     
@@ -610,7 +619,7 @@ async def process_list_category_selection(callback: CallbackQuery):
     await callback.answer()
 
 @router.callback_query(F.data.startswith("list_page|"))
-async def process_list_page(callback: CallbackQuery):
+async def process_list_page(callback: CallbackQuery, state: FSMContext):
     parts = callback.data.split("|")
     cat_key = parts[1]
     page = int(parts[2])
@@ -624,6 +633,9 @@ async def process_list_page(callback: CallbackQuery):
         await callback.answer()
         return
         
+    await state.set_state(ListCardsStates.browsing_deck)
+    await state.update_data(active_category=cat_key)
+    
     total_pages = math.ceil(len(cards) / CARDS_PER_PAGE)
     if page < 1:
         page = 1
@@ -642,7 +654,8 @@ async def process_list_page(callback: CallbackQuery):
     await callback.answer()
 
 @router.callback_query(F.data == "list_back_decks")
-async def process_list_back_decks(callback: CallbackQuery):
+async def process_list_back_decks(callback: CallbackQuery, state: FSMContext):
+    await state.clear()
     user_id = callback.from_user.id
     categories = database.get_user_categories(user_id)
     
@@ -662,6 +675,43 @@ async def process_list_back_decks(callback: CallbackQuery):
 @router.callback_query(F.data == "noop")
 async def process_noop_callback(callback: CallbackQuery):
     await callback.answer()
+
+@router.message(ListCardsStates.browsing_deck, ~F.text.startswith("/"))
+async def process_deck_search(message: Message, state: FSMContext):
+    search_query = message.text.strip()
+    
+    if search_query in ["➕ Create Card", "🎯 Study/Quiz", "📚 My Cards", "ℹ️ Help", "❌ Cancel"]:
+        await state.clear()
+        return
+        
+    data = await state.get_data()
+    cat_key = data.get("active_category", "all")
+    user_id = message.from_user.id
+    
+    matches = database.search_user_cards(user_id, search_query, category=cat_key)
+    
+    if not matches:
+        deck_name = escape(cat_key) if cat_key != "all" else "all decks"
+        await message.answer(
+            f"🔍 <b>No matching cards found for:</b> <i>{escape(search_query)}</i> in <b>{deck_name}</b>.\n\n"
+            "Try typing another word or phrase!",
+            parse_mode="HTML"
+        )
+        return
+        
+    deck_title = f"in deck <b>{escape(cat_key)}</b>" if cat_key != "all" else "in <b>all decks</b>"
+    result_text = f"🔎 <b>Closest matches for '{escape(search_query)}'</b> {deck_title}:\n\n"
+    
+    for card in matches[:5]:
+        q_escaped = escape(card['question'])
+        cat_escaped = escape(card['category'])
+        stats = f"🎯 Stats: {card['correct_count']}✅ / {card['incorrect_count']}❌"
+        result_text += f"📁 <b>{cat_escaped}</b>\n"
+        result_text += f"• <b>Q:</b> {q_escaped}\n"
+        result_text += f"  {stats}\n"
+        result_text += f"  🗑️ Delete: /delete_{card['id']}\n\n"
+        
+    await message.answer(result_text, parse_mode="HTML")
 
 
 
