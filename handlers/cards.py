@@ -1,4 +1,5 @@
 import re
+import math
 import logging
 from html import escape
 from aiogram import Router, F
@@ -18,7 +19,9 @@ from keyboards import (
     get_target_languages_keyboard,
     get_ai_preview_keyboard,
     get_category_selection_reply_keyboard,
-    get_ai_topic_keyboard
+    get_ai_topic_keyboard,
+    get_list_categories_keyboard,
+    get_pagination_keyboard
 )
 
 logger = logging.getLogger(__name__)
@@ -527,14 +530,39 @@ async def process_edited_answer(message: Message, state: FSMContext):
     )
     await message.answer(preview_text, reply_markup=get_ai_preview_keyboard(), parse_mode="Markdown")
 
+CARDS_PER_PAGE = 5
+
+def format_card_page_text(cards: list, category_name: str, page: int, total_pages: int) -> str:
+    start_idx = (page - 1) * CARDS_PER_PAGE
+    end_idx = start_idx + CARDS_PER_PAGE
+    page_cards = cards[start_idx:end_idx]
+    
+    if category_name != "all":
+        cat_escaped = escape(category_name)
+        text = f"📚 <b>Deck: {cat_escaped}</b> ({len(cards)} cards - Page {page}/{total_pages})\n\n"
+    else:
+        text = f"📚 <b>All Learning Cards</b> ({len(cards)} cards - Page {page}/{total_pages})\n\n"
+        
+    for card in page_cards:
+        q_escaped = escape(card['question'])
+        stats = f"🎯 Stats: {card['correct_count']}✅ / {card['incorrect_count']}❌"
+        if category_name == "all":
+            cat_escaped = escape(card['category'])
+            text += f"📁 <b>{cat_escaped}</b>\n"
+        text += f"• <b>Q:</b> {q_escaped}\n"
+        text += f"  {stats}\n"
+        text += f"  🗑️ Delete: /delete_{card['id']}\n\n"
+        
+    return text
+
 # --- LIST & DELETE CARDS HANDLERS ---
 @router.message(F.text == "📚 My Cards")
 @router.message(Command("list"))
 async def list_cards(message: Message):
     user_id = message.from_user.id
-    cards = database.get_user_cards(user_id)
+    categories = database.get_user_categories(user_id)
     
-    if not cards:
+    if not categories:
         await message.answer(
             "📭 You don't have any learning cards yet!\n\n"
             "Tap <b>➕ Create Card</b> to start creating your first flashcard.",
@@ -543,34 +571,99 @@ async def list_cards(message: Message):
         )
         return
         
-    response = "📚 <b>Your Learning Cards:</b>\n\n"
+    await message.answer(
+        "📚 <b>My Cards</b>\n\n"
+        "Please select a deck to view your flashcards:",
+        reply_markup=get_list_categories_keyboard(categories),
+        parse_mode="HTML"
+    )
+
+@router.callback_query(F.data.startswith("list_cat_"))
+async def process_list_category_selection(callback: CallbackQuery):
+    category_data = callback.data.split("list_cat_")[1]
+    user_id = callback.from_user.id
     
-    by_category = {}
-    for card in cards:
-        cat = card["category"]
-        if cat not in by_category:
-            by_category[cat] = []
-        by_category[cat].append(card)
+    selected_cat = None if category_data == "all" else category_data
+    cards = database.get_user_cards(user_id, category=selected_cat)
+    
+    if not cards:
+        await callback.message.answer(
+            "📭 No cards found in this deck!",
+            reply_markup=get_main_keyboard()
+        )
+        await callback.answer()
+        return
+
+    cat_key = category_data
+    total_pages = math.ceil(len(cards) / CARDS_PER_PAGE)
+    current_page = 1
+    
+    page_text = format_card_page_text(cards, cat_key, current_page, total_pages)
+    kb = get_pagination_keyboard(cat_key, current_page, total_pages)
+    
+    try:
+        await callback.message.edit_text(page_text, reply_markup=kb, parse_mode="HTML")
+    except Exception as err:
+        logger.warning(f"Failed to edit message with HTML formatting: {err}. Falling back to plain text.")
+        await callback.message.edit_text(page_text, reply_markup=kb)
         
-    for cat, cat_cards in by_category.items():
-        cat_escaped = escape(cat)
-        response += f"📁 <b>{cat_escaped}</b> ({len(cat_cards)} cards):\n"
-        for card in cat_cards:
-            q_escaped = escape(card['question'])
-            a_escaped = escape(card['answer'])
-            stats = f"🎯 Stats: {card['correct_count']}✅ / {card['incorrect_count']}❌"
-            response += f"• <b>Q:</b> {q_escaped}\n"
-            response += f"  <b>A:</b> {a_escaped}\n"
-            response += f"  {stats}\n"
-            response += f"  🗑️ Delete: /delete_{card['id']}\n\n"
-            
-    chunks = [response[i:i+4000] for i in range(0, len(response), 4000)]
-    for chunk in chunks:
-        try:
-            await message.answer(chunk, parse_mode="HTML")
-        except Exception as err:
-            logger.warning(f"Failed to send HTML formatted list_cards message: {err}. Falling back to plain text.")
-            await message.answer(chunk)
+    await callback.answer()
+
+@router.callback_query(F.data.startswith("list_page|"))
+async def process_list_page(callback: CallbackQuery):
+    parts = callback.data.split("|")
+    cat_key = parts[1]
+    page = int(parts[2])
+    user_id = callback.from_user.id
+    
+    selected_cat = None if cat_key == "all" else cat_key
+    cards = database.get_user_cards(user_id, category=selected_cat)
+    
+    if not cards:
+        await callback.message.edit_text("📭 No cards found.")
+        await callback.answer()
+        return
+        
+    total_pages = math.ceil(len(cards) / CARDS_PER_PAGE)
+    if page < 1:
+        page = 1
+    elif page > total_pages:
+        page = total_pages
+        
+    page_text = format_card_page_text(cards, cat_key, page, total_pages)
+    kb = get_pagination_keyboard(cat_key, page, total_pages)
+    
+    try:
+        await callback.message.edit_text(page_text, reply_markup=kb, parse_mode="HTML")
+    except Exception as err:
+        logger.warning(f"Failed to edit message with HTML formatting: {err}. Falling back to plain text.")
+        await callback.message.edit_text(page_text, reply_markup=kb)
+        
+    await callback.answer()
+
+@router.callback_query(F.data == "list_back_decks")
+async def process_list_back_decks(callback: CallbackQuery):
+    user_id = callback.from_user.id
+    categories = database.get_user_categories(user_id)
+    
+    if not categories:
+        await callback.message.edit_text("📭 You don't have any learning cards yet!")
+        await callback.answer()
+        return
+        
+    await callback.message.edit_text(
+        "📚 <b>My Cards</b>\n\n"
+        "Please select a deck to view your flashcards:",
+        reply_markup=get_list_categories_keyboard(categories),
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+@router.callback_query(F.data == "noop")
+async def process_noop_callback(callback: CallbackQuery):
+    await callback.answer()
+
+
 
 @router.message(F.text.regexp(r"^/delete_(\d+)$"))
 async def process_delete_command(message: Message):
