@@ -64,6 +64,8 @@ async def select_category(callback: CallbackQuery, state: FSMContext):
     await send_next_card(callback.message, callback.from_user.id, category)
     await callback.answer()
 
+import random
+
 async def send_next_card(message: Message, user_id: int, category: str):
     card = database.get_random_card(user_id, category)
     if not card:
@@ -73,37 +75,57 @@ async def send_next_card(message: Message, user_id: int, category: str):
         )
         return
         
+    is_reversed = random.choice([True, False])
     stats = f"({card['correct_count']}✅ / {card['incorrect_count']}❌)"
     q_escaped = escape(card['question'])
+    a_escaped = escape(card['answer'])
     cat_escaped = escape(card['category'])
     
+    if is_reversed:
+        mode_badge = " [Mode: ⬅️ Answer ➔ Question]"
+        prompt_label = "💡 <b>Answer / Clue:</b>"
+        prompt_content = f"<i>{a_escaped}</i>"
+    else:
+        mode_badge = " [Mode: ➡️ Question ➔ Answer]"
+        prompt_label = "❓ <b>Question:</b>"
+        prompt_content = f"<i>{q_escaped}</i>"
+        
     card_text = (
-        f"📝 <b>Quiz Card</b> (ID: {card['id']}) {stats}\n"
+        f"📝 <b>Quiz Card</b> (ID: {card['id']}) {stats}{mode_badge}\n"
         f"📁 Category: <i>{cat_escaped}</i>\n\n"
-        f"❓ <b>Question:</b>\n"
-        f"<i>{q_escaped}</i>"
+        f"{prompt_label}\n"
+        f"{prompt_content}"
     )
     try:
         await message.answer(
             card_text,
-            reply_markup=get_reveal_keyboard(card["id"]),
+            reply_markup=get_reveal_keyboard(card["id"], is_reversed=is_reversed),
             parse_mode="HTML"
         )
     except Exception:
         plain_text = (
             f"📝 Quiz Card (ID: {card['id']}) {stats}\n"
             f"📁 Category: {card['category']}\n\n"
-            f"❓ Question:\n"
-            f"{card['question']}"
+            f"{'Answer' if is_reversed else 'Question'}:\n"
+            f"{card['answer'] if is_reversed else card['question']}"
         )
         await message.answer(
             plain_text,
-            reply_markup=get_reveal_keyboard(card["id"])
+            reply_markup=get_reveal_keyboard(card["id"], is_reversed=is_reversed)
         )
 
 @router.callback_query(QuizStates.studying, F.data.startswith("reveal_"))
 async def reveal_answer(callback: CallbackQuery, state: FSMContext):
-    card_id = int(callback.data.split("reveal_")[1])
+    cb_data = callback.data
+    is_reversed = cb_data.startswith("reveal_rev_")
+    
+    if is_reversed:
+        card_id = int(cb_data.split("reveal_rev_")[1])
+    elif cb_data.startswith("reveal_std_"):
+        card_id = int(cb_data.split("reveal_std_")[1])
+    else:
+        card_id = int(cb_data.split("reveal_")[1])
+
     user_id = callback.from_user.id
     
     # We find this card in the db to make sure we show the correct answer
@@ -119,16 +141,32 @@ async def reveal_answer(callback: CallbackQuery, state: FSMContext):
     q_escaped = escape(card['question'])
     a_escaped = escape(card['answer'])
     cat_escaped = escape(card['category'])
+    comment = card.get('comment', '')
+    comment_html = f"\n\n📌 <b>Additional Info:</b>\n{escape(comment)}" if comment else ""
+    comment_plain = f"\n\nAdditional Info:\n{comment}" if comment else ""
     
-    revealed_text = (
-        f"📝 <b>Quiz Card</b> (ID: {card['id']}) {stats}\n"
-        f"📁 Category: <i>{cat_escaped}</i>\n\n"
-        f"❓ <b>Question:</b>\n"
-        f"<i>{q_escaped}</i>\n\n"
-        f"💡 <b>Answer:</b>\n"
-        f"<b>{a_escaped}</b>\n\n"
-        "How did you do?"
-    )
+    if is_reversed:
+        revealed_text = (
+            f"📝 <b>Quiz Card</b> (ID: {card['id']}) {stats}\n"
+            f"📁 Category: <i>{cat_escaped}</i>\n\n"
+            f"💡 <b>Answer / Clue:</b>\n"
+            f"<i>{a_escaped}</i>\n\n"
+            f"❓ <b>Question / Target:</b>\n"
+            f"<b>{q_escaped}</b>"
+            f"{comment_html}\n\n"
+            "How did you do?"
+        )
+    else:
+        revealed_text = (
+            f"📝 <b>Quiz Card</b> (ID: {card['id']}) {stats}\n"
+            f"📁 Category: <i>{cat_escaped}</i>\n\n"
+            f"❓ <b>Question:</b>\n"
+            f"<i>{q_escaped}</i>\n\n"
+            f"💡 <b>Answer:</b>\n"
+            f"<b>{a_escaped}</b>"
+            f"{comment_html}\n\n"
+            "How did you do?"
+        )
     try:
         await callback.message.edit_text(
             revealed_text,
@@ -139,10 +177,9 @@ async def reveal_answer(callback: CallbackQuery, state: FSMContext):
         plain_text = (
             f"📝 Quiz Card (ID: {card['id']}) {stats}\n"
             f"📁 Category: {card['category']}\n\n"
-            f"❓ Question:\n"
-            f"{card['question']}\n\n"
-            f"💡 Answer:\n"
-            f"{card['answer']}\n\n"
+            f"Question: {card['question']}\n"
+            f"Answer: {card['answer']}"
+            f"{comment_plain}\n\n"
             "How did you do?"
         )
         await callback.message.edit_text(
