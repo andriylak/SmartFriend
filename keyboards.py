@@ -134,3 +134,30 @@ def get_ai_topic_keyboard(has_saved_prompt: bool = False):
         placeholder="Enter topic, word, or phrase..."
     )
 
+def get_list_categories_keyboard(categories: list):
+    builder = InlineKeyboardBuilder()
+    builder.add(InlineKeyboardButton(text="🌐 All Decks", callback_data="list_cat_all"))
+    for cat in categories:
+        builder.add(InlineKeyboardButton(text=f"📁 {cat}", callback_data=f"list_cat_{cat}"))
+    builder.adjust(1)
+    return builder.as_markup()
+
+def get_pagination_keyboard(category: str, current_page: int, total_pages: int):
+    builder = InlineKeyboardBuilder()
+    
+    nav_buttons = []
+    if current_page > 1:
+        nav_buttons.append(InlineKeyboardButton(text="⬅️ Prev", callback_data=f"list_page|{category}|{current_page - 1}"))
+    
+    nav_buttons.append(InlineKeyboardButton(text=f"📄 {current_page}/{total_pages}", callback_data="noop"))
+    
+    if current_page < total_pages:
+        nav_buttons.append(InlineKeyboardButton(text="Next ➡️", callback_data=f"list_page|{category}|{current_page + 1}"))
+        
+    builder.row(*nav_buttons)
+    builder.row(InlineKeyboardButton(text="🔙 Change Deck", callback_data="list_back_decks"))
+    
+    return builder.as_markup()
+
+
+
