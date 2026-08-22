@@ -128,15 +128,17 @@ class TestDatabase(unittest.TestCase):
         self.assertIsNone(setting)
         
         # Save setting
-        database.save_deck_setting(user_id, category, "language", target_language="English")
+        database.save_deck_setting(user_id, category, "language", source_language="Spanish", target_language="English")
         setting = database.get_deck_setting(user_id, category)
         self.assertIsNotNone(setting)
         self.assertEqual(setting["preset_key"], "language")
+        self.assertEqual(setting["source_language"], "Spanish")
         self.assertEqual(setting["target_language"], "English")
         
         # Update setting (ON CONFLICT)
-        database.save_deck_setting(user_id, category, "language", target_language="Ukrainian")
+        database.save_deck_setting(user_id, category, "language", source_language="German", target_language="Ukrainian")
         updated = database.get_deck_setting(user_id, category)
+        self.assertEqual(updated["source_language"], "German")
         self.assertEqual(updated["target_language"], "Ukrainian")
 
     def test_search_user_cards(self):
