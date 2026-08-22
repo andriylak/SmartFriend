@@ -1,5 +1,6 @@
 import sqlite3
 import os
+import difflib
 
 DB_PATH = "learning_bot.db"
 
@@ -170,3 +171,42 @@ def get_deck_setting(user_id: int, category: str):
             "custom_prompt": row[2]
         }
     return None
+
+def search_user_cards(user_id: int, query: str, category: str = None):
+    cards = get_user_cards(user_id, category if category != "all" else None)
+    if not cards or not query.strip():
+        return []
+
+    q_clean = query.strip().lower()
+    
+    # 1. First, check for exact/substring matches
+    substring_matches = []
+    for card in cards:
+        q_text = card['question'].lower()
+        a_text = card['answer'].lower()
+        if q_clean in q_text or q_clean in a_text:
+            substring_matches.append(card)
+            
+    if substring_matches:
+        return substring_matches
+
+    # 2. If no substring matches, perform fuzzy matching using difflib
+    scored_cards = []
+    for card in cards:
+        q_score = difflib.SequenceMatcher(None, q_clean, card['question'].lower()).ratio()
+        a_score = difflib.SequenceMatcher(None, q_clean, card['answer'].lower()).ratio()
+        max_score = max(q_score, a_score)
+        
+        for word in card['question'].lower().split() + card['answer'].lower().split():
+            clean_word = word.strip("?,.!;:()[]{}")
+            if clean_word:
+                word_score = difflib.SequenceMatcher(None, q_clean, clean_word).ratio()
+                if word_score > max_score:
+                    max_score = word_score
+
+        if max_score >= 0.4:
+            scored_cards.append((max_score, card))
+
+    scored_cards.sort(key=lambda item: item[0], reverse=True)
+    return [card for score, card in scored_cards[:5]]
+
