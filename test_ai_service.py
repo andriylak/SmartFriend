@@ -36,6 +36,13 @@ Hope that helps!"""
         self.assertEqual(parsed["question"], "What is 2 + 2?")
         self.assertEqual(parsed["answer"], "4")
 
+    def test_parse_card_json_with_correction_note(self):
+        raw = '{"question": "comida", "answer": "Food", "correction_note": "Auto-corrected typo comidaa ➔ comida"}'
+        parsed = parse_card_json(raw)
+        self.assertEqual(parsed["question"], "comida")
+        self.assertEqual(parsed["answer"], "Food")
+        self.assertEqual(parsed["correction_note"], "Auto-corrected typo comidaa ➔ comida")
+
     def test_preset_prompts_exist(self):
         self.assertIn("language", PRESET_PROMPTS)
         self.assertIn("definitions", PRESET_PROMPTS)
@@ -46,10 +53,11 @@ Hope that helps!"""
     def test_language_preset_prompt_formatting(self):
         instruction = PRESET_PROMPTS["language"]["system_instruction"].format(
             topic="el gato",
+            source_language="Spanish",
             target_language="Ukrainian"
         )
         self.assertIn("el gato", instruction)
-        self.assertIn("Target Translation Language: Ukrainian", instruction)
+        self.assertIn("Spanish", instruction)
         self.assertIn("Ukrainian", instruction)
 
 if __name__ == "__main__":

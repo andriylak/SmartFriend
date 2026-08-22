@@ -18,16 +18,21 @@ PRESET_PROMPTS = {
             "Source / Learning Language (Translate FROM): {source_language}\n"
             "Target Translation Language (Translate TO): {target_language}\n"
             "User Input / Topic / Word / Phrase: {topic}\n\n"
-            "Special Verification & Correction Instructions:\n"
-            "1. Verify if the requested word/phrase '{topic}' exists and is correct in {source_language}.\n"
-            "2. IF THE WORD/PHRASE DOES NOT EXIST, HAS A TYPO, OR IS MISSPELLED in {source_language}:\n"
-            "   - Identify the typo or non-existent word.\n"
-            "   - Propose and use the closest correct word(s) or relevant phrase(s) in {source_language}.\n"
-            "   - Clearly note the correction in the answer (e.g., '⚠️ Correction: \"{topic}\" was not found in {source_language}. Proposing closest word: \"[Closest Word]\"').\n"
-            "3. Format requirements:\n"
-            "Return ONLY a JSON object with keys 'question' and 'answer'.\n"
-            "'question': The correct word, phrase, or sentence in {source_language}.\n"
-            "'answer': The direct translation of the word/phrase into {target_language}, pronunciation/phonetics (if helpful), any correction note (if applicable), and an example sentence in {source_language} with its translation in {target_language}."
+            "Instructions & Typo Handling:\n"
+            "1. Check if '{topic}' has any typos, misspellings, or non-standard forms in {source_language}.\n"
+            "2. If there IS a typo or misspelling, normalize and fix it for the card's 'question', 'answer', and 'comment', and specify what was corrected in 'correction_note' (e.g. 'Auto-corrected typo \"comidaa\" ➔ \"comida\"'). If there is no typo, set 'correction_note' to null.\n"
+            "3. STRICT RULE: Do NOT include meta-notes, disclaimers, or typo warnings inside 'question', 'answer', or 'comment' (e.g., NO '⚠️ Correction:' or 'Note: did you mean...'). They must contain ONLY pure study content.\n\n"
+            "Format requirements:\n"
+            "Return ONLY a JSON object with 3 primary keys: 'question', 'answer', 'comment', and optional 'correction_note':\n"
+            "- 'question': The clean word, phrase, or sentence in {source_language} (e.g. 'el gato').\n"
+            "- 'answer': The direct, clean translation in {target_language} ONLY (e.g. 'the cat'). Keep this concise and free of examples or extra info.\n"
+            "- 'comment': All additional linguistic details & context, formatted clearly:\n"
+            "  • Pronunciation / Phonetics (IPA or phonetic spelling)\n"
+            "  • Part of Speech (e.g., Noun, Transitive Verb, Adjective, Idiom)\n"
+            "  • Usage Frequency & Register (e.g., Common / Everyday, Formal, Colloquial, Slang)\n"
+            "  • Dialect / Regional Variation (e.g., Universal, Spain, Latin America)\n"
+            "  • Example Sentence (in {source_language} with translation in {target_language})\n"
+            "- 'correction_note': Short explanation of typo correction if any, otherwise null."
         )
     },
     "definitions": {
@@ -36,9 +41,10 @@ PRESET_PROMPTS = {
             "You are an educational assistant specializing in study cards.\n"
             "Topic / Prompt: {topic}\n"
             "Format requirements:\n"
-            "Return ONLY a JSON object with keys 'question' and 'answer'.\n"
+            "Return ONLY a JSON object with keys 'question', 'answer', and optional 'comment'.\n"
             "'question': A clear, direct question asking for the definition, formula, or core concept.\n"
-            "'answer': A concise, accurate definition and brief explanation."
+            "'answer': A concise, accurate definition.\n"
+            "'comment': Additional explanation or context."
         )
     },
     "programming": {
@@ -47,9 +53,10 @@ PRESET_PROMPTS = {
             "You are a computer science tutor.\n"
             "Topic / Prompt: {topic}\n"
             "Format requirements:\n"
-            "Return ONLY a JSON object with keys 'question' and 'answer'.\n"
+            "Return ONLY a JSON object with keys 'question', 'answer', and optional 'comment'.\n"
             "'question': A coding question, syntax problem, or code output prediction.\n"
-            "'answer': The concise solution code block and explanation."
+            "'answer': The concise solution code block.\n"
+            "'comment': Explanation of the solution."
         )
     },
     "trivia": {
@@ -58,9 +65,10 @@ PRESET_PROMPTS = {
             "You are a trivia and facts expert.\n"
             "Topic / Prompt: {topic}\n"
             "Format requirements:\n"
-            "Return ONLY a JSON object with keys 'question' and 'answer'.\n"
+            "Return ONLY a JSON object with keys 'question', 'answer', and optional 'comment'.\n"
             "'question': An engaging trivia or historical fact question.\n"
-            "'answer': The correct answer along with a fascinating context detail."
+            "'answer': The correct concise answer.\n"
+            "'comment': A fascinating context detail or history background."
         )
     },
     "custom": {
@@ -69,9 +77,10 @@ PRESET_PROMPTS = {
             "User Custom Instructions: {custom_prompt}\n"
             "Topic / Context: {topic}\n"
             "Format requirements:\n"
-            "Return ONLY a JSON object with keys 'question' and 'answer'.\n"
+            "Return ONLY a JSON object with keys 'question', 'answer', and optional 'comment'.\n"
             "'question': Front side of the flashcard based on instructions.\n"
-            "'answer': Back side of the flashcard based on instructions."
+            "'answer': Back side of the flashcard based on instructions.\n"
+            "'comment': Additional notes or comments if applicable."
         )
     }
 }
@@ -113,15 +122,17 @@ def clean_json_text(text: str) -> str:
         
     return text
 
-def parse_card_json(raw_text: str) -> Dict[str, str]:
-    """Parse raw text into a valid dict with question and answer keys."""
+def parse_card_json(raw_text: str) -> Dict[str, Optional[str]]:
+    """Parse raw text into a valid dict with question, answer, comment, and optional correction_note keys."""
     cleaned = clean_json_text(raw_text)
     try:
         data = json.loads(cleaned)
         if isinstance(data, dict) and "question" in data and "answer" in data:
             return {
                 "question": str(data["question"]).strip(),
-                "answer": str(data["answer"]).strip()
+                "answer": str(data["answer"]).strip(),
+                "comment": str(data["comment"]).strip() if data.get("comment") else "",
+                "correction_note": str(data["correction_note"]).strip() if data.get("correction_note") else None
             }
     except Exception as e:
         logger.warning(f"Failed to parse JSON directly: {e}, raw text: {raw_text}")
@@ -137,7 +148,7 @@ def parse_card_json(raw_text: str) -> Dict[str, str]:
         elif line.lower().startswith("answer:") or line.lower().startswith("a:"):
             answer = line.split(":", 1)[1].strip()
 
-    return {"question": question, "answer": answer}
+    return {"question": question, "answer": answer, "comment": "", "correction_note": None}
 
 async def generate_ai_card(
     preset_key: str,
