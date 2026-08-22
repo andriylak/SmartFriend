@@ -15,12 +15,19 @@ PRESET_PROMPTS = {
         "title": "🌐 Language Learning",
         "system_instruction": (
             "You are an expert language tutor. Create a high-quality flashcard for learning vocabulary, phrases, or grammar.\n"
-            "Topic / Word / Phrase: {topic}\n"
-            "Target Translation Language: {target_language}\n"
-            "Format requirements:\n"
+            "Source / Learning Language (Translate FROM): {source_language}\n"
+            "Target Translation Language (Translate TO): {target_language}\n"
+            "User Input / Topic / Word / Phrase: {topic}\n\n"
+            "Special Verification & Correction Instructions:\n"
+            "1. Verify if the requested word/phrase '{topic}' exists and is correct in {source_language}.\n"
+            "2. IF THE WORD/PHRASE DOES NOT EXIST, HAS A TYPO, OR IS MISSPELLED in {source_language}:\n"
+            "   - Identify the typo or non-existent word.\n"
+            "   - Propose and use the closest correct word(s) or relevant phrase(s) in {source_language}.\n"
+            "   - Clearly note the correction in the answer (e.g., '⚠️ Correction: \"{topic}\" was not found in {source_language}. Proposing closest word: \"[Closest Word]\"').\n"
+            "3. Format requirements:\n"
             "Return ONLY a JSON object with keys 'question' and 'answer'.\n"
-            "'question': The word, phrase, or sentence in the learning language.\n"
-            "'answer': The direct translation of the word/phrase into {target_language}, pronunciation/phonetics (if helpful), and an example sentence in the learning language with its translation in {target_language}."
+            "'question': The correct word, phrase, or sentence in {source_language}.\n"
+            "'answer': The direct translation of the word/phrase into {target_language}, pronunciation/phonetics (if helpful), any correction note (if applicable), and an example sentence in {source_language} with its translation in {target_language}."
         )
     },
     "definitions": {
@@ -69,6 +76,28 @@ PRESET_PROMPTS = {
     }
 }
 
+def get_full_prompt_text(preset_key: str, source_language: Optional[str] = None, target_language: Optional[str] = None, custom_prompt: Optional[str] = None) -> str:
+    """Returns the full AI system instruction prompt template string."""
+    preset_info = PRESET_PROMPTS.get(preset_key, PRESET_PROMPTS["custom"])
+    source_lang = source_language or "Spanish"
+    target_lang = target_language or "English"
+    
+    if preset_key == "custom" and custom_prompt:
+        return preset_info["system_instruction"].format(
+            custom_prompt=custom_prompt,
+            topic="[Your Word/Topic]"
+        )
+    elif preset_key == "language":
+        return preset_info["system_instruction"].format(
+            topic="[Your Word/Topic]",
+            source_language=source_lang,
+            target_language=target_lang
+        )
+    else:
+        return preset_info["system_instruction"].format(
+            topic="[Your Word/Topic]"
+        )
+
 def clean_json_text(text: str) -> str:
     """Extract raw JSON text from markdown code blocks or surrounding text."""
     text = text.strip()
@@ -114,6 +143,7 @@ async def generate_ai_card(
     preset_key: str,
     topic: str,
     custom_prompt: Optional[str] = None,
+    source_language: Optional[str] = None,
     target_language: Optional[str] = None
 ) -> Dict[str, str]:
     """
@@ -128,6 +158,7 @@ async def generate_ai_card(
         )
 
     preset_info = PRESET_PROMPTS.get(preset_key, PRESET_PROMPTS["custom"])
+    source_lang = source_language or "Spanish"
     target_lang = target_language or "English"
     
     if preset_key == "custom" and custom_prompt:
@@ -138,6 +169,7 @@ async def generate_ai_card(
     elif preset_key == "language":
         instruction = preset_info["system_instruction"].format(
             topic=topic,
+            source_language=source_lang,
             target_language=target_lang
         )
     else:
