@@ -13,6 +13,7 @@ def init_db():
             user_id INTEGER NOT NULL,
             question TEXT NOT NULL,
             answer TEXT NOT NULL,
+            comment TEXT,
             category TEXT DEFAULT 'General',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             correct_count INTEGER DEFAULT 0,
@@ -36,15 +37,21 @@ def init_db():
     columns = [col[1] for col in cursor.fetchall()]
     if "source_language" not in columns:
         cursor.execute("ALTER TABLE deck_settings ADD COLUMN source_language TEXT")
+        
+    cursor.execute("PRAGMA table_info(cards)")
+    card_columns = [col[1] for col in cursor.fetchall()]
+    if "comment" not in card_columns:
+        cursor.execute("ALTER TABLE cards ADD COLUMN comment TEXT")
+        
     conn.commit()
     conn.close()
 
-def add_card(user_id: int, question: str, answer: str, category: str = "General") -> int:
+def add_card(user_id: int, question: str, answer: str, category: str = "General", comment: str = None) -> int:
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute(
-        "INSERT INTO cards (user_id, question, answer, category) VALUES (?, ?, ?, ?)",
-        (user_id, question, answer, category)
+        "INSERT INTO cards (user_id, question, answer, comment, category) VALUES (?, ?, ?, ?, ?)",
+        (user_id, question, answer, comment, category)
     )
     card_id = cursor.lastrowid
     conn.commit()
@@ -56,12 +63,12 @@ def get_user_cards(user_id: int, category: str = None):
     cursor = conn.cursor()
     if category:
         cursor.execute(
-            "SELECT id, question, answer, category, correct_count, incorrect_count FROM cards WHERE user_id = ? AND category = ? ORDER BY created_at DESC",
+            "SELECT id, question, answer, comment, category, correct_count, incorrect_count FROM cards WHERE user_id = ? AND category = ? ORDER BY created_at DESC",
             (user_id, category)
         )
     else:
         cursor.execute(
-            "SELECT id, question, answer, category, correct_count, incorrect_count FROM cards WHERE user_id = ? ORDER BY created_at DESC",
+            "SELECT id, question, answer, comment, category, correct_count, incorrect_count FROM cards WHERE user_id = ? ORDER BY created_at DESC",
             (user_id,)
         )
     rows = cursor.fetchall()
@@ -71,9 +78,10 @@ def get_user_cards(user_id: int, category: str = None):
             "id": row[0],
             "question": row[1],
             "answer": row[2],
-            "category": row[3],
-            "correct_count": row[4],
-            "incorrect_count": row[5]
+            "comment": row[3] or "",
+            "category": row[4],
+            "correct_count": row[5],
+            "incorrect_count": row[6]
         }
         for row in rows
     ]
@@ -83,12 +91,12 @@ def get_random_card(user_id: int, category: str = None):
     cursor = conn.cursor()
     if category:
         cursor.execute(
-            "SELECT id, question, answer, category, correct_count, incorrect_count FROM cards WHERE user_id = ? AND category = ? ORDER BY RANDOM() LIMIT 1",
+            "SELECT id, question, answer, comment, category, correct_count, incorrect_count FROM cards WHERE user_id = ? AND category = ? ORDER BY RANDOM() LIMIT 1",
             (user_id, category)
         )
     else:
         cursor.execute(
-            "SELECT id, question, answer, category, correct_count, incorrect_count FROM cards WHERE user_id = ? ORDER BY RANDOM() LIMIT 1",
+            "SELECT id, question, answer, comment, category, correct_count, incorrect_count FROM cards WHERE user_id = ? ORDER BY RANDOM() LIMIT 1",
             (user_id,)
         )
     row = cursor.fetchone()
@@ -98,9 +106,10 @@ def get_random_card(user_id: int, category: str = None):
             "id": row[0],
             "question": row[1],
             "answer": row[2],
-            "category": row[3],
-            "correct_count": row[4],
-            "incorrect_count": row[5]
+            "comment": row[3] or "",
+            "category": row[4],
+            "correct_count": row[5],
+            "incorrect_count": row[6]
         }
     return None
 
@@ -192,7 +201,8 @@ def search_user_cards(user_id: int, query: str, category: str = None):
     for card in cards:
         q_text = card['question'].lower()
         a_text = card['answer'].lower()
-        if q_clean in q_text or q_clean in a_text:
+        c_text = card.get('comment', '').lower()
+        if q_clean in q_text or q_clean in a_text or q_clean in c_text:
             substring_matches.append(card)
             
     if substring_matches:
@@ -203,9 +213,11 @@ def search_user_cards(user_id: int, query: str, category: str = None):
     for card in cards:
         q_score = difflib.SequenceMatcher(None, q_clean, card['question'].lower()).ratio()
         a_score = difflib.SequenceMatcher(None, q_clean, card['answer'].lower()).ratio()
-        max_score = max(q_score, a_score)
+        c_score = difflib.SequenceMatcher(None, q_clean, card.get('comment', '').lower()).ratio() if card.get('comment') else 0
+        max_score = max(q_score, a_score, c_score)
         
-        for word in card['question'].lower().split() + card['answer'].lower().split():
+        words = card['question'].lower().split() + card['answer'].lower().split() + card.get('comment', '').lower().split()
+        for word in words:
             clean_word = word.strip("?,.!;:()[]{}")
             if clean_word:
                 word_score = difflib.SequenceMatcher(None, q_clean, clean_word).ratio()

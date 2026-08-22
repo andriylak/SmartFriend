@@ -30,8 +30,8 @@ class TestDatabase(unittest.TestCase):
 
     def test_add_and_get_cards(self):
         user_id = 12345
-        # Add card
-        card_id = database.add_card(user_id, "What is Python?", "A programming language", "Programming")
+        # Add card with comment
+        card_id = database.add_card(user_id, "What is Python?", "A programming language", "Programming", comment="Popular language")
         self.assertIsNotNone(card_id)
         
         # Get cards
@@ -40,6 +40,7 @@ class TestDatabase(unittest.TestCase):
         self.assertEqual(cards[0]["id"], card_id)
         self.assertEqual(cards[0]["question"], "What is Python?")
         self.assertEqual(cards[0]["answer"], "A programming language")
+        self.assertEqual(cards[0]["comment"], "Popular language")
         self.assertEqual(cards[0]["category"], "Programming")
         self.assertEqual(cards[0]["correct_count"], 0)
         self.assertEqual(cards[0]["incorrect_count"], 0)
