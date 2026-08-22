@@ -14,6 +14,7 @@ import ai_service
 from keyboards import (
     get_main_keyboard,
     get_cancel_keyboard,
+    get_skip_keyboard,
     get_card_creation_mode_keyboard,
     get_ai_prompt_presets_keyboard,
     get_source_languages_keyboard,
@@ -42,12 +43,16 @@ class CreateCardStates(StatesGroup):
     waiting_for_category = State()
     waiting_for_question = State()
     waiting_for_answer = State()
+    waiting_for_comment = State()
     waiting_for_ai_prompt_preset = State()
     waiting_for_source_language = State()
     waiting_for_target_language = State()
     waiting_for_ai_custom_prompt = State()
     waiting_for_ai_topic = State()
     waiting_for_ai_preview = State()
+    waiting_for_edit_question = State()
+    waiting_for_edit_answer = State()
+    waiting_for_edit_comment = State()
     waiting_for_edit_question = State()
     waiting_for_edit_answer = State()
 
@@ -206,25 +211,44 @@ async def process_answer(message: Message, state: FSMContext):
         await message.answer("Please enter a valid answer.")
         return
         
+    await state.update_data(answer=answer)
+    await state.set_state(CreateCardStates.waiting_for_comment)
+    
+    await message.answer(
+        "📌 **Step 3: Additional Info / Comment (Optional)**\n\n"
+        "Enter any additional details, phonetics, or example sentences for this card, or tap **⏩ Skip**:",
+        reply_markup=get_skip_keyboard(),
+        parse_mode="Markdown"
+    )
+
+@router.message(CreateCardStates.waiting_for_comment)
+async def process_comment(message: Message, state: FSMContext):
+    text = message.text.strip()
+    comment = "" if text == "⏩ Skip" else text
+    
     user_data = await state.get_data()
     category = user_data.get("category", "General")
     question = user_data.get("question")
+    answer = user_data.get("answer")
     
     card_id = database.add_card(
         user_id=message.from_user.id,
         question=question,
         answer=answer,
-        category=category
+        category=category,
+        comment=comment
     )
     
     await state.clear()
     
+    comment_info = f"\n**Comment:** {comment}" if comment else ""
     success_text = (
         "🎉 **Card Created Successfully!**\n\n"
         f"**ID:** {card_id}\n"
         f"**Category:** {category}\n"
         f"**Question:** {question}\n"
-        f"**Answer:** {answer}\n\n"
+        f"**Answer:** {answer}"
+        f"{comment_info}\n\n"
         "You can now find this card in your study pool!"
     )
     await message.answer(success_text, reply_markup=get_main_keyboard(), parse_mode="Markdown")
@@ -458,8 +482,10 @@ async def generate_and_show_ai_preview(message: Message, state: FSMContext):
         )
         question = card_data["question"]
         answer = card_data["answer"]
+        comment = card_data.get("comment", "")
+        correction_note = card_data.get("correction_note")
         
-        await state.update_data(question=question, answer=answer)
+        await state.update_data(question=question, answer=answer, comment=comment)
         await state.set_state(CreateCardStates.waiting_for_ai_preview)
         
         # Delete status message
@@ -474,14 +500,19 @@ async def generate_and_show_ai_preview(message: Message, state: FSMContext):
             lang_str = f"🌐 **Translate:** {s_lang} ➔ {t_lang}\n"
         else:
             lang_str = ""
+
+        correction_str = f"💡 **Note:** {correction_note}\n" if correction_note else ""
+        comment_str = f"📌 **Additional Info:**\n{comment}\n\n" if comment else ""
             
         preview_text = (
             "🤖 **AI Flashcard Preview**\n\n"
             f"📁 **Category:** {category}\n"
             f"🎯 **Preset:** {preset_text}\n"
-            f"{lang_str}\n"
+            f"{lang_str}"
+            f"{correction_str}\n"
             f"❓ **Question:**\n{question}\n\n"
             f"💡 **Answer:**\n{answer}\n\n"
+            f"{comment_str}"
             "✨ *Would you like to save this card, edit it, or regenerate?*"
         )
         await message.answer(preview_text, reply_markup=get_ai_preview_keyboard(), parse_mode="Markdown")
@@ -507,6 +538,7 @@ async def process_ai_save(callback: CallbackQuery, state: FSMContext):
     category = data.get("category", "General")
     question = data.get("question")
     answer = data.get("answer")
+    comment = data.get("comment", "")
     
     if not question or not answer:
         await callback.answer("Error: Missing card content.", show_alert=True)
@@ -516,16 +548,19 @@ async def process_ai_save(callback: CallbackQuery, state: FSMContext):
         user_id=callback.from_user.id,
         question=question,
         answer=answer,
-        category=category
+        category=category,
+        comment=comment
     )
     
     await state.clear()
+    comment_info = f"\n**Comment:** {comment}" if comment else ""
     await callback.message.edit_text(
         "🎉 **AI Card Saved Successfully!**\n\n"
         f"**ID:** {card_id}\n"
         f"**Category:** {category}\n"
         f"**Question:** {question}\n"
-        f"**Answer:** {answer}\n\n"
+        f"**Answer:** {answer}"
+        f"{comment_info}\n\n"
         "Saved to your flashcards pool!",
         parse_mode="Markdown"
     )
@@ -542,11 +577,11 @@ async def start_edit_ai_question(callback: CallbackQuery, state: FSMContext):
     )
     await callback.answer()
 
-@router.callback_query(CreateCardStates.waiting_for_ai_preview, F.data == "ai_edit_a")
-async def start_edit_ai_answer(callback: CallbackQuery, state: FSMContext):
-    await state.set_state(CreateCardStates.waiting_for_edit_answer)
+@router.callback_query(CreateCardStates.waiting_for_ai_preview, F.data == "ai_edit_c")
+async def start_edit_ai_comment(callback: CallbackQuery, state: FSMContext):
+    await state.set_state(CreateCardStates.waiting_for_edit_comment)
     await callback.message.answer(
-        "✏️ **Edit Answer**\n\nPlease type the updated **Answer** text below:",
+        "✏️ **Edit Comment / Additional Info**\n\nPlease type the updated **Comment** text below (or type `/skip` to clear):",
         reply_markup=get_cancel_keyboard(),
         parse_mode="Markdown"
     )
@@ -580,6 +615,8 @@ async def process_edited_question(message: Message, state: FSMContext):
     category = data.get("category", "General")
     preset_text = data.get("preset_text", "AI Card")
     answer = data.get("answer", "")
+    comment = data.get("comment", "")
+    comment_str = f"📌 **Additional Info:**\n{comment}\n\n" if comment else ""
     
     preview_text = (
         "🤖 **AI Flashcard Preview (Updated Question)**\n\n"
@@ -587,6 +624,7 @@ async def process_edited_question(message: Message, state: FSMContext):
         f"🎯 **Preset:** {preset_text}\n\n"
         f"❓ **Question:**\n{new_q}\n\n"
         f"💡 **Answer:**\n{answer}\n\n"
+        f"{comment_str}"
         "✨ *Would you like to save this card, edit it further, or regenerate?*"
     )
     await message.answer(preview_text, reply_markup=get_ai_preview_keyboard(), parse_mode="Markdown")
@@ -605,6 +643,8 @@ async def process_edited_answer(message: Message, state: FSMContext):
     category = data.get("category", "General")
     preset_text = data.get("preset_text", "AI Card")
     question = data.get("question", "")
+    comment = data.get("comment", "")
+    comment_str = f"📌 **Additional Info:**\n{comment}\n\n" if comment else ""
     
     preview_text = (
         "🤖 **AI Flashcard Preview (Updated Answer)**\n\n"
@@ -612,8 +652,37 @@ async def process_edited_answer(message: Message, state: FSMContext):
         f"🎯 **Preset:** {preset_text}\n\n"
         f"❓ **Question:**\n{question}\n\n"
         f"💡 **Answer:**\n{new_a}\n\n"
+        f"{comment_str}"
         "✨ *Would you like to save this card, edit it further, or regenerate?*"
     )
+    await message.answer(preview_text, reply_markup=get_ai_preview_keyboard(), parse_mode="Markdown")
+
+@router.message(CreateCardStates.waiting_for_edit_comment)
+async def process_edited_comment(message: Message, state: FSMContext):
+    new_c = message.text.strip()
+    if new_c.lower() in ["/skip", "skip"]:
+        new_c = ""
+        
+    await state.update_data(comment=new_c)
+    await state.set_state(CreateCardStates.waiting_for_ai_preview)
+    
+    data = await state.get_data()
+    category = data.get("category", "General")
+    preset_text = data.get("preset_text", "AI Card")
+    question = data.get("question", "")
+    answer = data.get("answer", "")
+    comment_str = f"📌 **Additional Info:**\n{new_c}\n\n" if new_c else ""
+    
+    preview_text = (
+        "🤖 **AI Flashcard Preview (Updated Comment)**\n\n"
+        f"📁 **Category:** {category}\n"
+        f"🎯 **Preset:** {preset_text}\n\n"
+        f"❓ **Question:**\n{question}\n\n"
+        f"💡 **Answer:**\n{answer}\n\n"
+        f"{comment_str}"
+        "✨ *Would you like to save this card, edit it further, or regenerate?*"
+    )
+    await message.answer(preview_text, reply_markup=get_ai_preview_keyboard(), parse_mode="Markdown")
     await message.answer(preview_text, reply_markup=get_ai_preview_keyboard(), parse_mode="Markdown")
 
 CARDS_PER_PAGE = 5

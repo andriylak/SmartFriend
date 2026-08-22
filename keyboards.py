@@ -21,10 +21,22 @@ def get_cancel_keyboard():
     )
     return keyboard
 
-def get_reveal_keyboard(card_id: int):
-    # Inline keyboard to show the answer for a card
+def get_skip_keyboard():
+    keyboard = ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="⏩ Skip")],
+            [KeyboardButton(text="❌ Cancel")]
+        ],
+        resize_keyboard=True
+    )
+    return keyboard
+
+def get_reveal_keyboard(card_id: int, is_reversed: bool = False):
+    # Inline keyboard to show the answer or question for a card
     builder = InlineKeyboardBuilder()
-    builder.add(InlineKeyboardButton(text="👁️ Show Answer", callback_data=f"reveal_{card_id}"))
+    text = "👁️ Show Question" if is_reversed else "👁️ Show Answer"
+    cb = f"reveal_rev_{card_id}" if is_reversed else f"reveal_std_{card_id}"
+    builder.add(InlineKeyboardButton(text=text, callback_data=cb))
     return builder.as_markup()
 
 def get_evaluation_keyboard(card_id: int):
@@ -100,10 +112,11 @@ def get_ai_preview_keyboard():
         InlineKeyboardButton(text="✅ Save Card", callback_data="ai_save"),
         InlineKeyboardButton(text="✏️ Edit Question", callback_data="ai_edit_q"),
         InlineKeyboardButton(text="✏️ Edit Answer", callback_data="ai_edit_a"),
+        InlineKeyboardButton(text="✏️ Edit Comment", callback_data="ai_edit_c"),
         InlineKeyboardButton(text="🔄 Regenerate", callback_data="ai_regen"),
         InlineKeyboardButton(text="❌ Cancel", callback_data="ai_cancel")
     )
-    builder.adjust(1, 2, 2)
+    builder.adjust(1, 2, 2, 1)
     return builder.as_markup()
 
 def get_categories_keyboard(categories: list):
