@@ -239,19 +239,20 @@ async def process_comment(message: Message, state: FSMContext):
         comment=comment
     )
     
-    await state.clear()
+    # Stay in deck creation loop for the active category
+    await state.set_state(CreateCardStates.waiting_for_question)
+    await state.update_data(category=category, question=None, answer=None, comment=None)
     
     comment_info = f"\n**Comment:** {comment}" if comment else ""
     success_text = (
-        "🎉 **Card Created Successfully!**\n\n"
-        f"**ID:** {card_id}\n"
-        f"**Category:** {category}\n"
+        f"🎉 **Card #{card_id} Saved!** (Deck: *{category}*)\n\n"
         f"**Question:** {question}\n"
         f"**Answer:** {answer}"
         f"{comment_info}\n\n"
-        "You can now find this card in your study pool!"
+        "✍️ **Add another card to this deck:** Type the **Question** for your next card below\n"
+        "*(or tap **❌ Cancel** when finished)*:"
     )
-    await message.answer(success_text, reply_markup=get_main_keyboard(), parse_mode="Markdown")
+    await message.answer(success_text, reply_markup=get_cancel_keyboard(), parse_mode="Markdown")
 
 # --- AI-ASSISTED CARD FLOW ---
 @router.message(CreateCardStates.waiting_for_ai_prompt_preset)
@@ -552,19 +553,32 @@ async def process_ai_save(callback: CallbackQuery, state: FSMContext):
         comment=comment
     )
     
-    await state.clear()
+    # Stay in deck creation loop for the active category with saved prompt settings
+    await state.set_state(CreateCardStates.waiting_for_ai_topic)
+    await state.update_data(
+        category=category,
+        topic=None,
+        question=None,
+        answer=None,
+        comment=None
+    )
+    
     comment_info = f"\n**Comment:** {comment}" if comment else ""
     await callback.message.edit_text(
-        "🎉 **AI Card Saved Successfully!**\n\n"
-        f"**ID:** {card_id}\n"
-        f"**Category:** {category}\n"
+        f"🎉 **Card #{card_id} Saved!** (Deck: *{category}*)\n\n"
         f"**Question:** {question}\n"
         f"**Answer:** {answer}"
-        f"{comment_info}\n\n"
-        "Saved to your flashcards pool!",
+        f"{comment_info}",
         parse_mode="Markdown"
     )
-    await callback.message.answer("Main Menu", reply_markup=get_main_keyboard())
+    
+    await callback.message.answer(
+        f"🤖 **Add another card to deck *{category}***\n\n"
+        "What word, phrase, or topic do you want the AI to create next?\n\n"
+        "*(Or tap **✍️ Manual Card** / **❌ Cancel** below)*",
+        reply_markup=get_ai_topic_keyboard(has_saved_prompt=True),
+        parse_mode="Markdown"
+    )
     await callback.answer()
 
 @router.callback_query(CreateCardStates.waiting_for_ai_preview, F.data == "ai_edit_q")
