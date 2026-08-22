@@ -139,5 +139,21 @@ class TestDatabase(unittest.TestCase):
         updated = database.get_deck_setting(user_id, category)
         self.assertEqual(updated["target_language"], "Ukrainian")
 
+    def test_search_user_cards(self):
+        user_id = 66666
+        database.add_card(user_id, "el gato", "the cat", "Spanish")
+        database.add_card(user_id, "el perro", "the dog", "Spanish")
+        database.add_card(user_id, "la manzana", "the apple", "Spanish")
+
+        # Substring match
+        matches = database.search_user_cards(user_id, "gato", "Spanish")
+        self.assertEqual(len(matches), 1)
+        self.assertEqual(matches[0]["question"], "el gato")
+
+        # Fuzzy match with slight typo
+        fuzzy = database.search_user_cards(user_id, "perro", "Spanish")
+        self.assertEqual(len(fuzzy), 1)
+        self.assertEqual(fuzzy[0]["question"], "el perro")
+
 if __name__ == "__main__":
     unittest.main()
