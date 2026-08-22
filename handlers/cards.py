@@ -16,6 +16,7 @@ from keyboards import (
     get_cancel_keyboard,
     get_card_creation_mode_keyboard,
     get_ai_prompt_presets_keyboard,
+    get_source_languages_keyboard,
     get_target_languages_keyboard,
     get_ai_preview_keyboard,
     get_category_selection_reply_keyboard,
@@ -34,6 +35,7 @@ class CreateCardStates(StatesGroup):
     waiting_for_question = State()
     waiting_for_answer = State()
     waiting_for_ai_prompt_preset = State()
+    waiting_for_source_language = State()
     waiting_for_target_language = State()
     waiting_for_ai_custom_prompt = State()
     waiting_for_ai_topic = State()
@@ -137,6 +139,7 @@ async def process_category(message: Message, state: FSMContext):
         
         if deck_setting:
             preset_key = deck_setting["preset_key"]
+            source_language = deck_setting.get("source_language")
             target_language = deck_setting.get("target_language")
             custom_prompt = deck_setting.get("custom_prompt")
             preset_text = PRESET_NAME_MAP.get(preset_key, "AI Card")
@@ -144,14 +147,17 @@ async def process_category(message: Message, state: FSMContext):
             await state.update_data(
                 preset_key=preset_key,
                 preset_text=preset_text,
+                source_language=source_language,
                 target_language=target_language,
                 custom_prompt=custom_prompt,
                 has_saved_prompt=True
             )
             await state.set_state(CreateCardStates.waiting_for_ai_topic)
             
-            if preset_key == "language" and target_language:
-                setting_desc = f"*{preset_text}* (Translate To: *{target_language}*)"
+            if preset_key == "language":
+                s_lang = source_language or "Spanish"
+                t_lang = target_language or "English"
+                setting_desc = f"*{preset_text}* (FROM: *{s_lang}* ➔ TO: *{t_lang}*)"
             elif preset_key == "custom" and custom_prompt:
                 setting_desc = f"*{preset_text}* (*{custom_prompt}*)"
             else:
@@ -252,12 +258,12 @@ async def process_ai_preset(message: Message, state: FSMContext):
     await state.update_data(preset_key=preset_key, preset_text=preset_text)
     
     if preset_key == "language":
-        await state.set_state(CreateCardStates.waiting_for_target_language)
+        await state.set_state(CreateCardStates.waiting_for_source_language)
         await message.answer(
-            "🌐 **AI Step 3: Choose Target Translation Language**\n\n"
-            "What language do you want the word, phrase, and example sentences translated **TO**?\n"
-            "(e.g., *English*, *Ukrainian*, *Spanish*, *German*, *French*)",
-            reply_markup=get_target_languages_keyboard(),
+            "🌐 **AI Step 3: Choose Source (Learning) Language**\n\n"
+            "What language are you translating **FROM**?\n"
+            "(e.g., *Spanish*, *German*, *Ukrainian*, *English*, *French*)",
+            reply_markup=get_source_languages_keyboard(),
             parse_mode="Markdown"
         )
     elif preset_key == "custom":
@@ -285,6 +291,28 @@ async def process_ai_preset(message: Message, state: FSMContext):
             parse_mode="Markdown"
         )
 
+@router.message(CreateCardStates.waiting_for_source_language)
+async def process_source_language(message: Message, state: FSMContext):
+    raw_lang = message.text.strip()
+    if not raw_lang:
+        await message.answer("Please enter or select a valid source language.")
+        return
+        
+    clean_lang = re.sub(r"^[^\w\s]+", "", raw_lang).strip()
+    source_language = clean_lang if clean_lang else raw_lang
+    
+    await state.update_data(source_language=source_language)
+    await state.set_state(CreateCardStates.waiting_for_target_language)
+    
+    await message.answer(
+        "🌐 **AI Step 4: Choose Target Translation Language**\n\n"
+        f"Translate FROM: *{source_language}*\n\n"
+        "What language do you want the word, phrase, and example sentences translated **TO**?\n"
+        "(e.g., *English*, *Ukrainian*, *Spanish*, *German*, *French*)",
+        reply_markup=get_target_languages_keyboard(),
+        parse_mode="Markdown"
+    )
+
 @router.message(CreateCardStates.waiting_for_target_language)
 async def process_target_language(message: Message, state: FSMContext):
     raw_lang = message.text.strip()
@@ -292,7 +320,6 @@ async def process_target_language(message: Message, state: FSMContext):
         await message.answer("Please enter or select a valid target language.")
         return
         
-    # Remove emoji flag icons if user clicked keyboard button (e.g. "🇬🇧 English" -> "English")
     clean_lang = re.sub(r"^[^\w\s]+", "", raw_lang).strip()
     target_language = clean_lang if clean_lang else raw_lang
     
@@ -300,17 +327,26 @@ async def process_target_language(message: Message, state: FSMContext):
     
     data = await state.get_data()
     category = data.get("category", "General")
-    database.save_deck_setting(message.from_user.id, category, "language", target_language=target_language)
+    source_language = data.get("source_language", "Spanish")
+    
+    database.save_deck_setting(
+        message.from_user.id,
+        category,
+        "language",
+        source_language=source_language,
+        target_language=target_language
+    )
     await state.update_data(has_saved_prompt=True)
     
     await state.set_state(CreateCardStates.waiting_for_ai_topic)
     
     await message.answer(
-        "📝 **AI Step 4: Enter Topic, Word, or Phrase**\n\n"
+        "📝 **AI Step 5: Enter Topic, Word, or Phrase**\n\n"
         f"Selected Preset: *🌐 Language Learning*\n"
-        f"Translate To: *{target_language}*\n\n"
+        f"Translate FROM: *{source_language}*\n"
+        f"Translate TO: *{target_language}*\n\n"
         "What word, phrase, or sentence do you want to learn? "
-        "(e.g., *el gato*, *la manzana*, *ordering food in Spanish*)",
+        "(e.g., *el gato*, *la manzana*, *gatoo*)",
         reply_markup=get_ai_topic_keyboard(has_saved_prompt=True),
         parse_mode="Markdown"
     )
@@ -343,11 +379,45 @@ async def process_ai_topic(message: Message, state: FSMContext):
     topic = message.text.strip()
     
     if topic == "⚙️ Change Deck Prompt":
+        user_id = message.from_user.id
         data = await state.get_data()
         category = data.get("category", "General")
+        deck_setting = database.get_deck_setting(user_id, category)
+        
+        current_setting_str = "None"
+        full_instruction = ""
+        
+        target_dict = deck_setting if deck_setting else data
+        preset_key = target_dict.get("preset_key")
+        
+        if preset_key:
+            preset_text = PRESET_NAME_MAP.get(preset_key, "AI Card")
+            s_lang = target_dict.get("source_language") or "Spanish"
+            t_lang = target_dict.get("target_language") or "English"
+            c_prompt = target_dict.get("custom_prompt")
+            
+            if preset_key == "language":
+                current_setting_str = f"*{preset_text}* (FROM: *{s_lang}* ➔ TO: *{t_lang}*)"
+            elif preset_key == "custom" and c_prompt:
+                current_setting_str = f"*{preset_text}* (*{c_prompt}*)"
+            else:
+                current_setting_str = f"*{preset_text}*"
+                
+            full_instruction = ai_service.get_full_prompt_text(
+                preset_key=preset_key,
+                source_language=s_lang,
+                target_language=t_lang,
+                custom_prompt=c_prompt
+            )
+            
         await state.set_state(CreateCardStates.waiting_for_ai_prompt_preset)
+        
+        prompt_detail = f"\n\n📜 **Full AI System Instruction Prompt:**\n```\n{full_instruction}\n```" if full_instruction else ""
+        
         await message.answer(
             f"⚙️ **Change Deck Prompt** (Category: *{category}*)\n\n"
+            f"📌 **Current Preset:** {current_setting_str}"
+            f"{prompt_detail}\n\n"
             "Select a new prompt preset below to update the AI instructions for this deck:",
             reply_markup=get_ai_prompt_presets_keyboard(),
             parse_mode="Markdown"
@@ -367,6 +437,7 @@ async def generate_and_show_ai_preview(message: Message, state: FSMContext):
     preset_text = data.get("preset_text", "Default Preset")
     topic = data.get("topic", "")
     custom_prompt = data.get("custom_prompt")
+    source_language = data.get("source_language")
     target_language = data.get("target_language")
     category = data.get("category", "General")
     
@@ -377,6 +448,7 @@ async def generate_and_show_ai_preview(message: Message, state: FSMContext):
             preset_key=preset_key,
             topic=topic,
             custom_prompt=custom_prompt,
+            source_language=source_language,
             target_language=target_language
         )
         question = card_data["question"]
@@ -391,12 +463,18 @@ async def generate_and_show_ai_preview(message: Message, state: FSMContext):
         except Exception:
             pass
             
-        target_lang_str = f"🌐 **Translate To:** {target_language}\n" if preset_key == "language" and target_language else ""
+        if preset_key == "language":
+            s_lang = source_language or "Spanish"
+            t_lang = target_language or "English"
+            lang_str = f"🌐 **Translate:** {s_lang} ➔ {t_lang}\n"
+        else:
+            lang_str = ""
+            
         preview_text = (
             "🤖 **AI Flashcard Preview**\n\n"
             f"📁 **Category:** {category}\n"
             f"🎯 **Preset:** {preset_text}\n"
-            f"{target_lang_str}\n"
+            f"{lang_str}\n"
             f"❓ **Question:**\n{question}\n\n"
             f"💡 **Answer:**\n{answer}\n\n"
             "✨ *Would you like to save this card, edit it, or regenerate?*"
