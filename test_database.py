@@ -44,6 +44,19 @@ class TestDatabase(unittest.TestCase):
         self.assertEqual(cards[0]["correct_count"], 0)
         self.assertEqual(cards[0]["incorrect_count"], 0)
 
+    def test_get_user_cards_by_category(self):
+        user_id = 54321
+        database.add_card(user_id, "Q_Math", "A_Math", "Math")
+        database.add_card(user_id, "Q_History", "A_History", "History")
+
+        cards_all = database.get_user_cards(user_id)
+        self.assertEqual(len(cards_all), 2)
+
+        cards_math = database.get_user_cards(user_id, category="Math")
+        self.assertEqual(len(cards_math), 1)
+        self.assertEqual(cards_math[0]["question"], "Q_Math")
+        self.assertEqual(cards_math[0]["category"], "Math")
+
     def test_get_random_card(self):
         user_id = 98765
         # Add multiple cards
