@@ -44,13 +44,19 @@ def add_card(user_id: int, question: str, answer: str, category: str = "General"
     conn.close()
     return card_id
 
-def get_user_cards(user_id: int):
+def get_user_cards(user_id: int, category: str = None):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    cursor.execute(
-        "SELECT id, question, answer, category, correct_count, incorrect_count FROM cards WHERE user_id = ? ORDER BY created_at DESC",
-        (user_id,)
-    )
+    if category:
+        cursor.execute(
+            "SELECT id, question, answer, category, correct_count, incorrect_count FROM cards WHERE user_id = ? AND category = ? ORDER BY created_at DESC",
+            (user_id, category)
+        )
+    else:
+        cursor.execute(
+            "SELECT id, question, answer, category, correct_count, incorrect_count FROM cards WHERE user_id = ? ORDER BY created_at DESC",
+            (user_id,)
+        )
     rows = cursor.fetchall()
     conn.close()
     return [
