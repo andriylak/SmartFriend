@@ -140,6 +140,7 @@ def get_ai_topic_keyboard(has_saved_prompt: bool = False):
     buttons = []
     if has_saved_prompt:
         buttons.append([KeyboardButton(text="⚙️ Change Deck Prompt")])
+    buttons.append([KeyboardButton(text="✍️ Manual Card")])
     buttons.append([KeyboardButton(text="❌ Cancel")])
     
     return ReplyKeyboardMarkup(
