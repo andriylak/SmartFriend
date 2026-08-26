@@ -60,5 +60,20 @@ Hope that helps!"""
         self.assertIn("Spanish", instruction)
         self.assertIn("Ukrainian", instruction)
 
+    def test_model_config(self):
+        import config
+        self.assertTrue(hasattr(config, "MODEL_NAME"))
+        self.assertTrue(hasattr(config, "FALLBACK_MODEL_NAME"))
+        self.assertTrue(hasattr(config, "FALLBACK_MODELS"))
+        self.assertIn(config.FALLBACK_MODEL_NAME, config.FALLBACK_MODELS)
+
+    def test_parse_card_json_truncated(self):
+        raw = '{\n  "question": "tucet",\n  "answer": "a dozen",'
+        parsed = parse_card_json(raw)
+        self.assertEqual(parsed["question"], "tucet")
+        self.assertEqual(parsed["answer"], "a dozen")
+
 if __name__ == "__main__":
     unittest.main()
+
+

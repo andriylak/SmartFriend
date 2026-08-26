@@ -30,8 +30,8 @@ class TestDatabase(unittest.TestCase):
 
     def test_add_and_get_cards(self):
         user_id = 12345
-        # Add card with comment
-        card_id = database.add_card(user_id, "What is Python?", "A programming language", "Programming", comment="Popular language")
+        # Add card with comment (single direction for test)
+        card_id = database.add_card(user_id, "What is Python?", "A programming language", "Programming", comment="Popular language", create_pair=False)
         self.assertIsNotNone(card_id)
         
         # Get cards
@@ -47,8 +47,8 @@ class TestDatabase(unittest.TestCase):
 
     def test_get_user_cards_by_category(self):
         user_id = 54321
-        database.add_card(user_id, "Q_Math", "A_Math", "Math")
-        database.add_card(user_id, "Q_History", "A_History", "History")
+        database.add_card(user_id, "Q_Math", "A_Math", "Math", create_pair=False)
+        database.add_card(user_id, "Q_History", "A_History", "History", create_pair=False)
 
         cards_all = database.get_user_cards(user_id)
         self.assertEqual(len(cards_all), 2)
@@ -61,8 +61,8 @@ class TestDatabase(unittest.TestCase):
     def test_get_random_card(self):
         user_id = 98765
         # Add multiple cards
-        database.add_card(user_id, "Q1", "A1", "Cat1")
-        database.add_card(user_id, "Q2", "A2", "Cat2")
+        database.add_card(user_id, "Q1", "A1", "Cat1", create_pair=False)
+        database.add_card(user_id, "Q2", "A2", "Cat2", create_pair=False)
         
         # Get random card overall
         card = database.get_random_card(user_id)
@@ -76,7 +76,7 @@ class TestDatabase(unittest.TestCase):
 
     def test_delete_card(self):
         user_id = 11111
-        card_id = database.add_card(user_id, "To be deleted", "Answer")
+        card_id = database.add_card(user_id, "To be deleted", "Answer", create_pair=False)
         
         # Verify card exists
         cards_before = database.get_user_cards(user_id)
@@ -92,7 +92,7 @@ class TestDatabase(unittest.TestCase):
 
     def test_update_card_stats(self):
         user_id = 22222
-        card_id = database.add_card(user_id, "Stats Q", "Stats A")
+        card_id = database.add_card(user_id, "Stats Q", "Stats A", create_pair=False)
         
         # Initial stats
         cards = database.get_user_cards(user_id)
@@ -113,9 +113,9 @@ class TestDatabase(unittest.TestCase):
 
     def test_get_user_categories(self):
         user_id = 33333
-        database.add_card(user_id, "Q1", "A1", "Math")
-        database.add_card(user_id, "Q2", "A2", "History")
-        database.add_card(user_id, "Q3", "A3", "Math") # duplicate category
+        database.add_card(user_id, "Q1", "A1", "Math", create_pair=False)
+        database.add_card(user_id, "Q2", "A2", "History", create_pair=False)
+        database.add_card(user_id, "Q3", "A3", "Math", create_pair=False) # duplicate category
         
         categories = database.get_user_categories(user_id)
         self.assertEqual(categories, ["History", "Math"])
@@ -144,9 +144,9 @@ class TestDatabase(unittest.TestCase):
 
     def test_search_user_cards(self):
         user_id = 66666
-        database.add_card(user_id, "el gato", "the cat", "Spanish")
-        database.add_card(user_id, "el perro", "the dog", "Spanish")
-        database.add_card(user_id, "la manzana", "the apple", "Spanish")
+        database.add_card(user_id, "el gato", "the cat", "Spanish", create_pair=False)
+        database.add_card(user_id, "el perro", "the dog", "Spanish", create_pair=False)
+        database.add_card(user_id, "la manzana", "the apple", "Spanish", create_pair=False)
 
         # Substring match
         matches = database.search_user_cards(user_id, "gato", "Spanish")
@@ -157,6 +157,37 @@ class TestDatabase(unittest.TestCase):
         fuzzy = database.search_user_cards(user_id, "perro", "Spanish")
         self.assertEqual(len(fuzzy), 1)
         self.assertEqual(fuzzy[0]["question"], "el perro")
+
+    def test_srs_scheduling(self):
+        user_id = 77777
+        card_id = database.add_card(user_id, "Hola", "Hello", "Spanish", create_pair=False)
+        
+        # Verify card is due immediately
+        due_cards = database.get_due_cards(user_id, "Spanish")
+        self.assertEqual(len(due_cards), 1)
+        self.assertEqual(due_cards[0]["id"], card_id)
+        
+        counts = database.get_due_card_counts(user_id)
+        self.assertEqual(counts.get("Spanish"), 1)
+        
+        # Grade card as 'good'
+        res = database.update_card_srs(card_id, user_id, "good")
+        self.assertEqual(res["rating"], "good")
+        self.assertEqual(res["interval_days"], 1.0)
+        
+        # After grading 'good' for interval=1 day, card should no longer be due immediately
+        due_cards_after = database.get_due_cards(user_id, "Spanish")
+        self.assertEqual(len(due_cards_after), 0)
+
+    def test_dual_direction_card_creation(self):
+        user_id = 88888
+        std_id = database.add_card(user_id, "el perro", "the dog", "Spanish", create_pair=True)
+        cards = database.get_user_cards(user_id, "Spanish")
+        self.assertEqual(len(cards), 2)
+        
+        directions = [c["direction"] for c in cards]
+        self.assertIn("standard", directions)
+        self.assertIn("reverse", directions)
 
 if __name__ == "__main__":
     unittest.main()
