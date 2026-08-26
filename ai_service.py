@@ -137,6 +137,20 @@ def parse_card_json(raw_text: str) -> Dict[str, Optional[str]]:
     except Exception as e:
         logger.warning(f"Failed to parse JSON directly: {e}, raw text: {raw_text}")
 
+    # Regex extraction fallback for truncated or partially formatted JSON
+    q_match = re.search(r'"question"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"', raw_text)
+    a_match = re.search(r'"answer"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"', raw_text)
+    c_match = re.search(r'"comment"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"', raw_text)
+    n_match = re.search(r'"correction_note"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"', raw_text)
+
+    if q_match and a_match:
+        return {
+            "question": q_match.group(1).strip(),
+            "answer": a_match.group(1).strip(),
+            "comment": c_match.group(1).strip() if c_match else "",
+            "correction_note": n_match.group(1).strip() if n_match else None
+        }
+
     # Fallback heuristic splitting if JSON parsing fails
     lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
     question = "Generated Question"
@@ -188,7 +202,13 @@ async def generate_ai_card(
             topic=topic
         )
 
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{config.MODEL_NAME}:generateContent?key={api_key}"
+    # Build ordered list of models to try starting with primary MODEL_NAME, followed by FALLBACK_MODELS
+    fallback_list = getattr(config, "FALLBACK_MODELS", [getattr(config, "FALLBACK_MODEL_NAME", "gemini-3.1-flash-lite")])
+    models_to_try = [config.MODEL_NAME]
+    for model in fallback_list:
+        if model not in models_to_try:
+            models_to_try.append(model)
+
     payload = {
         "contents": [
             {
@@ -203,23 +223,31 @@ async def generate_ai_card(
         }
     }
 
+
     headers = {"Content-Type": "application/json"}
+    last_error_msg = ""
 
     async with aiohttp.ClientSession() as session:
-        async with session.post(url, json=payload, headers=headers, timeout=aiohttp.ClientTimeout(total=20)) as resp:
-            if resp.status != 200:
-                fallback_url = f"https://generativelanguage.googleapis.com/v1beta/models/{config.FALLBACK_MODEL_NAME}:generateContent?key={api_key}"
-                async with session.post(fallback_url, json=payload, headers=headers, timeout=aiohttp.ClientTimeout(total=20)) as fallback_resp:
-                    if fallback_resp.status != 200:
-                        error_text = await fallback_resp.text()
-                        raise RuntimeError(f"Gemini API returned status {fallback_resp.status}: {error_text}")
-                    data = await fallback_resp.json()
-            else:
-                data = await resp.json()
+        for model in models_to_try:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+            try:
+                async with session.post(url, json=payload, headers=headers, timeout=aiohttp.ClientTimeout(total=20)) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        try:
+                            candidate_text = data["candidates"][0]["content"]["parts"][0]["text"]
+                            logger.info(f"Successfully generated AI card using model '{model}'")
+                            return parse_card_json(candidate_text)
+                        except (KeyError, IndexError) as err:
+                            logger.error(f"Invalid API response format from model '{model}': {data}")
+                            last_error_msg = f"Model '{model}' returned invalid response format"
+                    else:
+                        error_text = await resp.text()
+                        logger.warning(f"Model '{model}' request failed with status {resp.status}: {error_text[:200]}")
+                        last_error_msg = f"Model '{model}' status {resp.status}: {error_text[:200]}"
+            except Exception as e:
+                logger.warning(f"Network/API error with model '{model}': {e}")
+                last_error_msg = f"Model '{model}' error: {e}"
 
-    try:
-        candidate_text = data["candidates"][0]["content"]["parts"][0]["text"]
-        return parse_card_json(candidate_text)
-    except (KeyError, IndexError) as err:
-        logger.error(f"Invalid API response format: {data}")
-        raise RuntimeError("AI model returned an empty or invalid response format.") from err
+    raise RuntimeError(f"All Gemini API models failed. Last error: {last_error_msg}")
+
