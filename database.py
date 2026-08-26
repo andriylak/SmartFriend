@@ -42,33 +42,67 @@ def init_db():
     card_columns = [col[1] for col in cursor.fetchall()]
     if "comment" not in card_columns:
         cursor.execute("ALTER TABLE cards ADD COLUMN comment TEXT")
+    if "next_review_at" not in card_columns:
+        cursor.execute("ALTER TABLE cards ADD COLUMN next_review_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+    if "interval_days" not in card_columns:
+        cursor.execute("ALTER TABLE cards ADD COLUMN interval_days REAL DEFAULT 0")
+    if "ease_factor" not in card_columns:
+        cursor.execute("ALTER TABLE cards ADD COLUMN ease_factor REAL DEFAULT 2.5")
+    if "repetition_count" not in card_columns:
+        cursor.execute("ALTER TABLE cards ADD COLUMN repetition_count INTEGER DEFAULT 0")
+    if "direction" not in card_columns:
+        cursor.execute("ALTER TABLE cards ADD COLUMN direction TEXT DEFAULT 'standard'")
+
+    # Migration: Auto-generate missing reverse cards for existing cards
+    cursor.execute("SELECT id, user_id, question, answer, comment, category FROM cards WHERE direction IS NULL OR direction = 'standard'")
+    std_cards = cursor.fetchall()
+    for std_card in std_cards:
+        c_id, u_id, q, a, comm, cat = std_card
+        cursor.execute(
+            "SELECT id FROM cards WHERE user_id = ? AND category = ? AND direction = 'reverse' AND question = ? AND answer = ?",
+            (u_id, cat, a, q)
+        )
+        if not cursor.fetchone():
+            cursor.execute(
+                "INSERT INTO cards (user_id, question, answer, comment, category, direction, next_review_at, interval_days, ease_factor, repetition_count) VALUES (?, ?, ?, ?, ?, 'reverse', CURRENT_TIMESTAMP, 0, 2.5, 0)",
+                (u_id, a, q, comm, cat)
+            )
         
     conn.commit()
     conn.close()
 
-def add_card(user_id: int, question: str, answer: str, category: str = "General", comment: str = None) -> int:
+def add_card(user_id: int, question: str, answer: str, category: str = "General", comment: str = None, create_pair: bool = True) -> int:
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
+    # 1. Standard Card (Q -> A)
     cursor.execute(
-        "INSERT INTO cards (user_id, question, answer, comment, category) VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO cards (user_id, question, answer, comment, category, direction, next_review_at, interval_days, ease_factor, repetition_count) VALUES (?, ?, ?, ?, ?, 'standard', CURRENT_TIMESTAMP, 0, 2.5, 0)",
         (user_id, question, answer, comment, category)
     )
-    card_id = cursor.lastrowid
+    std_card_id = cursor.lastrowid
+
+    # 2. Reverse Card (A -> Q)
+    if create_pair:
+        cursor.execute(
+            "INSERT INTO cards (user_id, question, answer, comment, category, direction, next_review_at, interval_days, ease_factor, repetition_count) VALUES (?, ?, ?, ?, ?, 'reverse', CURRENT_TIMESTAMP, 0, 2.5, 0)",
+            (user_id, answer, question, comment, category)
+        )
+
     conn.commit()
     conn.close()
-    return card_id
+    return std_card_id
 
 def get_user_cards(user_id: int, category: str = None):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     if category:
         cursor.execute(
-            "SELECT id, question, answer, comment, category, correct_count, incorrect_count FROM cards WHERE user_id = ? AND category = ? ORDER BY created_at DESC",
+            "SELECT id, question, answer, comment, category, correct_count, incorrect_count, next_review_at, interval_days, ease_factor, repetition_count, direction FROM cards WHERE user_id = ? AND category = ? ORDER BY created_at DESC",
             (user_id, category)
         )
     else:
         cursor.execute(
-            "SELECT id, question, answer, comment, category, correct_count, incorrect_count FROM cards WHERE user_id = ? ORDER BY created_at DESC",
+            "SELECT id, question, answer, comment, category, correct_count, incorrect_count, next_review_at, interval_days, ease_factor, repetition_count, direction FROM cards WHERE user_id = ? ORDER BY created_at DESC",
             (user_id,)
         )
     rows = cursor.fetchall()
@@ -81,22 +115,92 @@ def get_user_cards(user_id: int, category: str = None):
             "comment": row[3] or "",
             "category": row[4],
             "correct_count": row[5],
-            "incorrect_count": row[6]
+            "incorrect_count": row[6],
+            "next_review_at": row[7],
+            "interval_days": row[8] or 0,
+            "ease_factor": row[9] or 2.5,
+            "repetition_count": row[10] or 0,
+            "direction": row[11] or "standard"
         }
         for row in rows
     ]
+
+def get_due_cards(user_id: int, category: str = None, study_all: bool = False):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    if study_all:
+        if category:
+            cursor.execute(
+                "SELECT id, question, answer, comment, category, correct_count, incorrect_count, next_review_at, interval_days, ease_factor, repetition_count, direction FROM cards WHERE user_id = ? AND category = ? ORDER BY RANDOM()",
+                (user_id, category)
+            )
+        else:
+            cursor.execute(
+                "SELECT id, question, answer, comment, category, correct_count, incorrect_count, next_review_at, interval_days, ease_factor, repetition_count, direction FROM cards WHERE user_id = ? ORDER BY RANDOM()",
+                (user_id,)
+            )
+    else:
+        if category:
+            cursor.execute(
+                "SELECT id, question, answer, comment, category, correct_count, incorrect_count, next_review_at, interval_days, ease_factor, repetition_count, direction FROM cards WHERE user_id = ? AND category = ? AND (next_review_at IS NULL OR next_review_at <= CURRENT_TIMESTAMP) ORDER BY next_review_at ASC",
+                (user_id, category)
+            )
+        else:
+            cursor.execute(
+                "SELECT id, question, answer, comment, category, correct_count, incorrect_count, next_review_at, interval_days, ease_factor, repetition_count, direction FROM cards WHERE user_id = ? AND (next_review_at IS NULL OR next_review_at <= CURRENT_TIMESTAMP) ORDER BY next_review_at ASC",
+                (user_id,)
+            )
+    rows = cursor.fetchall()
+    conn.close()
+    return [
+        {
+            "id": row[0],
+            "question": row[1],
+            "answer": row[2],
+            "comment": row[3] or "",
+            "category": row[4],
+            "correct_count": row[5],
+            "incorrect_count": row[6],
+            "next_review_at": row[7],
+            "interval_days": row[8] or 0,
+            "ease_factor": row[9] or 2.5,
+            "repetition_count": row[10] or 0,
+            "direction": row[11] or "standard"
+        }
+        for row in rows
+    ]
+
+def get_due_card_counts(user_id: int):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT category, COUNT(*) FROM cards WHERE user_id = ? AND (next_review_at IS NULL OR next_review_at <= CURRENT_TIMESTAMP) GROUP BY category",
+        (user_id,)
+    )
+    rows = cursor.fetchall()
+    counts = {row[0]: row[1] for row in rows}
+    
+    cursor.execute(
+        "SELECT COUNT(*) FROM cards WHERE user_id = ? AND (next_review_at IS NULL OR next_review_at <= CURRENT_TIMESTAMP)",
+        (user_id,)
+    )
+    total_due = cursor.fetchone()[0]
+    counts["_all_"] = total_due
+    
+    conn.close()
+    return counts
 
 def get_random_card(user_id: int, category: str = None):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     if category:
         cursor.execute(
-            "SELECT id, question, answer, comment, category, correct_count, incorrect_count FROM cards WHERE user_id = ? AND category = ? ORDER BY RANDOM() LIMIT 1",
+            "SELECT id, question, answer, comment, category, correct_count, incorrect_count, next_review_at, interval_days, ease_factor, repetition_count FROM cards WHERE user_id = ? AND category = ? ORDER BY RANDOM() LIMIT 1",
             (user_id, category)
         )
     else:
         cursor.execute(
-            "SELECT id, question, answer, comment, category, correct_count, incorrect_count FROM cards WHERE user_id = ? ORDER BY RANDOM() LIMIT 1",
+            "SELECT id, question, answer, comment, category, correct_count, incorrect_count, next_review_at, interval_days, ease_factor, repetition_count FROM cards WHERE user_id = ? ORDER BY RANDOM() LIMIT 1",
             (user_id,)
         )
     row = cursor.fetchone()
@@ -109,7 +213,11 @@ def get_random_card(user_id: int, category: str = None):
             "comment": row[3] or "",
             "category": row[4],
             "correct_count": row[5],
-            "incorrect_count": row[6]
+            "incorrect_count": row[6],
+            "next_review_at": row[7],
+            "interval_days": row[8] or 0,
+            "ease_factor": row[9] or 2.5,
+            "repetition_count": row[10] or 0
         }
     return None
 
@@ -140,6 +248,77 @@ def update_card_stats(card_id: int, user_id: int, correct: bool):
         )
     conn.commit()
     conn.close()
+
+def update_card_srs(card_id: int, user_id: int, rating: str) -> dict:
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT interval_days, ease_factor, repetition_count, correct_count, incorrect_count FROM cards WHERE id = ? AND user_id = ?",
+        (card_id, user_id)
+    )
+    row = cursor.fetchone()
+    if not row:
+        conn.close()
+        return {}
+
+    interval = row[0] or 0.0
+    ease = row[1] or 2.5
+    reps = row[2] or 0
+    correct_count = row[3] or 0
+    incorrect_count = row[4] or 0
+
+    if rating == "again":
+        reps = 0
+        interval = 0.007  # ~10 minutes / due now
+        ease = max(1.3, round(ease - 0.2, 2))
+        incorrect_count += 1
+    elif rating == "hard":
+        reps = reps + 1 if reps > 0 else 1
+        interval = 1.0 if interval == 0 else round(interval * 1.2, 2)
+        ease = max(1.3, round(ease - 0.15, 2))
+        correct_count += 1
+    elif rating == "good":
+        reps += 1
+        if reps == 1:
+            interval = 1.0
+        elif reps == 2:
+            interval = 6.0
+        else:
+            interval = round(interval * ease, 2)
+        correct_count += 1
+    elif rating == "easy":
+        reps += 1
+        if reps == 1:
+            interval = 4.0
+        elif reps == 2:
+            interval = 10.0
+        else:
+            interval = round(interval * ease * 1.3, 2)
+        ease = round(ease + 0.15, 2)
+        correct_count += 1
+
+    cursor.execute(
+        """
+        UPDATE cards SET 
+            interval_days = ?,
+            ease_factor = ?,
+            repetition_count = ?,
+            next_review_at = datetime('now', '+' || ? || ' days'),
+            correct_count = ?,
+            incorrect_count = ?
+        WHERE id = ? AND user_id = ?
+        """,
+        (interval, ease, reps, interval, correct_count, incorrect_count, card_id, user_id)
+    )
+    conn.commit()
+    conn.close()
+    
+    return {
+        "interval_days": interval,
+        "ease_factor": ease,
+        "repetition_count": reps,
+        "rating": rating
+    }
 
 def get_user_categories(user_id: int):
     conn = sqlite3.connect(DB_PATH)
