@@ -565,7 +565,7 @@ async def process_ai_save(callback: CallbackQuery, state: FSMContext):
     
     comment_info = f"\n**Comment:** {comment}" if comment else ""
     await callback.message.edit_text(
-        f"🎉 **Card #{card_id} Saved!** (Deck: *{category}*)\n\n"
+        f"🎉 **Card Pair Saved!** (Dual SRS: Q ➔ A & A ➔ Q | Deck: *{category}*)\n\n"
         f"**Question:** {question}\n"
         f"**Answer:** {answer}"
         f"{comment_info}",

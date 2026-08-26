@@ -40,13 +40,25 @@ def get_reveal_keyboard(card_id: int, is_reversed: bool = False):
     return builder.as_markup()
 
 def get_evaluation_keyboard(card_id: int):
-    # Inline keyboard for user to grade themselves
+    # Inline keyboard for Anki 4-tier SRS grading
     builder = InlineKeyboardBuilder()
     builder.add(
-        InlineKeyboardButton(text="✅ Got it Right", callback_data=f"grade_correct_{card_id}"),
-        InlineKeyboardButton(text="❌ Got it Wrong", callback_data=f"grade_incorrect_{card_id}")
+        InlineKeyboardButton(text="🔴 Again", callback_data=f"srs_again_{card_id}"),
+        InlineKeyboardButton(text="🟠 Hard", callback_data=f"srs_hard_{card_id}"),
+        InlineKeyboardButton(text="🟢 Good", callback_data=f"srs_good_{card_id}"),
+        InlineKeyboardButton(text="🔵 Easy", callback_data=f"srs_easy_{card_id}")
     )
-    builder.adjust(2)
+    builder.adjust(2, 2)
+    return builder.as_markup()
+
+def get_study_ahead_keyboard(category: str):
+    builder = InlineKeyboardBuilder()
+    cat_param = category if category else "all"
+    builder.add(
+        InlineKeyboardButton(text="⚡ Study All Cards Anyway", callback_data=f"study_ahead_{cat_param}"),
+        InlineKeyboardButton(text="🔙 Choose Another Deck", callback_data="study_back_decks")
+    )
+    builder.adjust(1)
     return builder.as_markup()
 
 def get_delete_card_keyboard(card_id: int):
@@ -119,14 +131,18 @@ def get_ai_preview_keyboard():
     builder.adjust(1, 2, 2, 1)
     return builder.as_markup()
 
-def get_categories_keyboard(categories: list):
+def get_categories_keyboard(categories: list, due_counts: dict = None):
     builder = InlineKeyboardBuilder()
+    counts = due_counts or {}
+    all_due = counts.get("_all_", 0)
+    
     # Add an option to quiz from all categories
-    builder.add(InlineKeyboardButton(text="🌐 All Categories", callback_data="quiz_cat_all"))
+    builder.add(InlineKeyboardButton(text=f"🌐 All Decks ({all_due} due)", callback_data="quiz_cat_all"))
     
     # Add each category as a button
     for cat in categories:
-        builder.add(InlineKeyboardButton(text=f"📁 {cat}", callback_data=f"quiz_cat_{cat}"))
+        cat_due = counts.get(cat, 0)
+        builder.add(InlineKeyboardButton(text=f"📁 {cat} ({cat_due} due)", callback_data=f"quiz_cat_{cat}"))
         
     builder.adjust(1) # one button per row
     return builder.as_markup()
