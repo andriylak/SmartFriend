@@ -1,3 +1,4 @@
+from html import escape
 import json
 import re
 import os
@@ -8,6 +9,41 @@ from typing import Dict, Optional
 import config
 
 logger = logging.getLogger(__name__)
+
+def format_comment(comment_text: Optional[str], fmt: str = "html") -> str:
+    """Auto-detects section headers like 'Header:' in a comment string and bolds them with clean line breaks (no emojis)."""
+    if not comment_text:
+        return ""
+        
+    lines = comment_text.splitlines()
+    formatted_lines = []
+    
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+            
+        match = re.match(r"^[\s•\-\*]*(?:(?:\*\*|\<\b\>)?([A-Za-z0-9\s/&_\-\(\)]+?)(?:\*\*|\</b\>)?:)\s*(.*)$", stripped)
+        if match:
+            raw_label = match.group(1).strip()
+            val = match.group(2).strip()
+            
+            if len(raw_label) <= 35:
+                if fmt.lower() == "html":
+                    val_escaped = escape(val)
+                    formatted_line = f"• <b>{escape(raw_label)}:</b> {val_escaped}" if val else f"• <b>{escape(raw_label)}:</b>"
+                else:
+                    formatted_line = f"• **{raw_label}:** {val}" if val else f"• **{raw_label}:**"
+                    
+                formatted_lines.append(formatted_line)
+                continue
+                
+        if fmt.lower() == "html":
+            formatted_lines.append(escape(stripped))
+        else:
+            formatted_lines.append(stripped)
+            
+    return "\n".join(formatted_lines)
 
 # Preset Prompt Descriptions
 PRESET_PROMPTS = {

@@ -7,6 +7,8 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 
 import database
+import ai_service
+from ai_service import format_comment
 from keyboards import (
     get_main_keyboard,
     get_cancel_keyboard,
@@ -195,8 +197,8 @@ async def reveal_answer(callback: CallbackQuery, state: FSMContext):
     a_escaped = escape(card['answer'])
     cat_escaped = escape(card['category'])
     comment = card.get('comment', '')
-    comment_html = f"\n\n📌 <b>Additional Info:</b>\n{escape(comment)}" if comment else ""
-    comment_plain = f"\n\nAdditional Info:\n{comment}" if comment else ""
+    comment_html = f"\n\n📌 <b>Additional Info:</b>\n{format_comment(comment, fmt='html')}" if comment else ""
+    comment_plain = f"\n\nAdditional Info:\n{format_comment(comment, fmt='plain')}" if comment else ""
     
     if is_reversed:
         revealed_text = (

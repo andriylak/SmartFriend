@@ -189,5 +189,31 @@ class TestDatabase(unittest.TestCase):
         self.assertIn("standard", directions)
         self.assertIn("reverse", directions)
 
+    def test_get_due_cards_randomized_and_prioritized(self):
+        user_id = 99999
+        # Add 5 cards
+        for i in range(5):
+            database.add_card(user_id, f"Question {i}", f"Answer {i}", "DeckA", create_pair=False)
+            
+        due = database.get_due_cards(user_id, "DeckA")
+        self.assertEqual(len(due), 5)
+        
+        # Test prioritization: fail card 3 so it becomes Tier 0 (Learning)
+        failed_id = due[3]["id"]
+        database.update_card_srs(failed_id, user_id, "again")
+        
+        # Manually reset next_review_at to past so it's due now as a learning card
+        import sqlite3
+        conn = sqlite3.connect(database.DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("UPDATE cards SET next_review_at = CURRENT_TIMESTAMP WHERE id = ?", (failed_id,))
+        conn.commit()
+        conn.close()
+        
+        due_prioritized = database.get_due_cards(user_id, "DeckA")
+        self.assertEqual(len(due_prioritized), 5)
+        # The failed card must be first because it is in Tier 0 (Learning)
+        self.assertEqual(due_prioritized[0]["id"], failed_id)
+
 if __name__ == "__main__":
     unittest.main()
