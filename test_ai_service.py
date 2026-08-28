@@ -2,6 +2,7 @@ import unittest
 from ai_service import (
     clean_json_text,
     parse_card_json,
+    format_comment,
     PRESET_PROMPTS
 )
 
@@ -17,6 +18,17 @@ class TestAIService(unittest.TestCase):
 Hope that helps!"""
         cleaned = clean_json_text(raw)
         self.assertEqual(cleaned, '{\n  "question": "Hola",\n  "answer": "Hello (Spanish)"\n}')
+
+    def test_format_comment(self):
+        comment_raw = "Pronunciation: /koˈmiða/\nPart of Speech: Noun\nExample Sentence: La comida está rica."
+        formatted_html = format_comment(comment_raw, fmt="html")
+        self.assertIn("• <b>Pronunciation:</b> /koˈmiða/", formatted_html)
+        self.assertIn("• <b>Part of Speech:</b> Noun", formatted_html)
+        self.assertIn("• <b>Example Sentence:</b> La comida está rica.", formatted_html)
+        
+        formatted_md = format_comment(comment_raw, fmt="markdown")
+        self.assertIn("• **Pronunciation:** /koˈmiða/", formatted_md)
+        self.assertIn("• **Part of Speech:** Noun", formatted_md)
 
     def test_parse_card_json_valid(self):
         raw = '{"question": "What is Python?", "answer": "A programming language."}'

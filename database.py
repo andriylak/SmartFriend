@@ -140,14 +140,24 @@ def get_due_cards(user_id: int, category: str = None, study_all: bool = False):
                 (user_id,)
             )
     else:
+        order_by_srs = """
+            ORDER BY 
+                CASE 
+                    WHEN (correct_count > 0 OR incorrect_count > 0) AND interval_days < 1.0 THEN 0
+                    WHEN repetition_count > 0 THEN 1
+                    ELSE 2
+                END ASC,
+                interval_days ASC,
+                RANDOM()
+        """
         if category:
             cursor.execute(
-                "SELECT id, question, answer, comment, category, correct_count, incorrect_count, next_review_at, interval_days, ease_factor, repetition_count, direction FROM cards WHERE user_id = ? AND category = ? AND (next_review_at IS NULL OR next_review_at <= CURRENT_TIMESTAMP) ORDER BY next_review_at ASC",
+                "SELECT id, question, answer, comment, category, correct_count, incorrect_count, next_review_at, interval_days, ease_factor, repetition_count, direction FROM cards WHERE user_id = ? AND category = ? AND (next_review_at IS NULL OR next_review_at <= CURRENT_TIMESTAMP)" + order_by_srs,
                 (user_id, category)
             )
         else:
             cursor.execute(
-                "SELECT id, question, answer, comment, category, correct_count, incorrect_count, next_review_at, interval_days, ease_factor, repetition_count, direction FROM cards WHERE user_id = ? AND (next_review_at IS NULL OR next_review_at <= CURRENT_TIMESTAMP) ORDER BY next_review_at ASC",
+                "SELECT id, question, answer, comment, category, correct_count, incorrect_count, next_review_at, interval_days, ease_factor, repetition_count, direction FROM cards WHERE user_id = ? AND (next_review_at IS NULL OR next_review_at <= CURRENT_TIMESTAMP)" + order_by_srs,
                 (user_id,)
             )
     rows = cursor.fetchall()
