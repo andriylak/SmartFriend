@@ -63,11 +63,10 @@ PRESET_PROMPTS = {
             "- 'question': The clean word, phrase, or sentence in {source_language} (e.g. 'el gato').\n"
             "- 'answer': The direct, clean translation in {target_language} ONLY (e.g. 'the cat'). Keep this concise and free of examples or extra info.\n"
             "- 'comment': All additional linguistic details & context, formatted clearly:\n"
-            "  • Pronunciation / Phonetics (IPA or phonetic spelling)\n"
-            "  • Part of Speech (e.g., Noun, Transitive Verb, Adjective, Idiom)\n"
             "  • Usage Frequency & Register (e.g., Common / Everyday, Formal, Colloquial, Slang)\n"
-            "  • Dialect / Regional Variation (e.g., Universal, Spain, Latin America)\n"
-            "  • Example Sentence (in {source_language} with translation in {target_language})\n"
+            "  • Dialect / Regional Variation (include ONLY if it is specific to a dialect or region)\n"
+            "  • Explanation: Explanation/definition of this word/phrase in {source_language}\n"
+            "  • Meanings & Examples: If there are multiple meanings, include ALL of them with their explanations in {source_language}. For EVERY meaning, provide an example sentence in {source_language} and its translation in {target_language}.\n"
             "- 'correction_note': Short explanation of typo correction if any, otherwise null."
         )
     },

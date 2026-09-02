@@ -71,6 +71,12 @@ Hope that helps!"""
         self.assertIn("el gato", instruction)
         self.assertIn("Spanish", instruction)
         self.assertIn("Ukrainian", instruction)
+        self.assertNotIn("Pronunciation", instruction)
+        self.assertNotIn("Part of Speech", instruction)
+        self.assertIn("Usage Frequency", instruction)
+        self.assertIn("Dialect", instruction)
+        self.assertIn("Explanation", instruction)
+        self.assertIn("Meanings & Examples", instruction)
 
     def test_model_config(self):
         import config
