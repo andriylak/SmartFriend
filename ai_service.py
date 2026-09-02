@@ -21,19 +21,26 @@ def format_comment(comment_text: Optional[str], fmt: str = "html") -> str:
     for line in lines:
         stripped = line.strip()
         if not stripped:
+            if formatted_lines and formatted_lines[-1] != "":
+                formatted_lines.append("")
             continue
             
-        match = re.match(r"^[\s•\-\*]*(?:(?:\*\*|\<\b\>)?([A-Za-z0-9\s/&_\-\(\)]+?)(?:\*\*|\</b\>)?:)\s*(.*)$", stripped)
+        match = re.match(r"^([\s•\-\*]*)(?:(?:\*\*|\<\b\>)?([A-Za-z0-9\s/&_\-\(\)]+?)(?:\*\*|\</b\>)?:)\s*(.*)$", line)
         if match:
-            raw_label = match.group(1).strip()
-            val = match.group(2).strip()
+            prefix = match.group(1)
+            raw_label = match.group(2).strip()
+            val = match.group(3).strip()
             
             if len(raw_label) <= 35:
+                # Use indented bullet for sub-items like Example: or Translation:
+                is_subitem = bool(prefix and (" " in prefix or "\t" in prefix or "-" in prefix))
+                bullet_prefix = "   • " if is_subitem else "• "
+                
                 if fmt.lower() == "html":
                     val_escaped = escape(val)
-                    formatted_line = f"• <b>{escape(raw_label)}:</b> {val_escaped}" if val else f"• <b>{escape(raw_label)}:</b>"
+                    formatted_line = f"{bullet_prefix}<b>{escape(raw_label)}:</b> {val_escaped}" if val else f"{bullet_prefix}<b>{escape(raw_label)}:</b>"
                 else:
-                    formatted_line = f"• **{raw_label}:** {val}" if val else f"• **{raw_label}:**"
+                    formatted_line = f"{bullet_prefix}**{raw_label}:** {val}" if val else f"{bullet_prefix}**{raw_label}:**"
                     
                 formatted_lines.append(formatted_line)
                 continue
@@ -64,9 +71,17 @@ PRESET_PROMPTS = {
             "- 'answer': The direct, clean translation in {target_language} ONLY (e.g. 'the cat'). Keep this concise and free of examples or extra info.\n"
             "- 'comment': All additional linguistic details & context, formatted clearly:\n"
             "  • Usage Frequency & Register (e.g., Common / Everyday, Formal, Colloquial, Slang)\n"
-            "  • Dialect / Regional Variation (include ONLY if it is specific to a dialect or region)\n"
-            "  • Explanation: Explanation/definition of this word/phrase in {source_language}\n"
-            "  • Meanings & Examples: If there are multiple meanings, include ALL of them with their explanations in {source_language}. For EVERY meaning, provide an example sentence in {source_language} and its translation in {target_language}.\n"
+            "  • Dialect / Regional Variation (include ONLY if it is specific to a dialect or region, e.g. Spain, Mexico; omit if universal standard)\n"
+            "  • Meanings & Examples:\n"
+            "    List each meaning (1., 2., etc.) with its definition in {source_language}. Under each meaning, place Example and Translation on separate indented lines.\n"
+            "    FORMAT EACH MEANING EXACTLY AS FOLLOWS:\n\n"
+            "    1. [Definition of meaning 1 in {source_language}]\n"
+            "       Example: [Example sentence in {source_language}]\n"
+            "       Translation: [Translation of example sentence in {target_language}]\n\n"
+            "    2. [Definition of meaning 2 in {source_language}]\n"
+            "       Example: [Example sentence in {source_language}]\n"
+            "       Translation: [Translation of example sentence in {target_language}]\n\n"
+            "    STRICT FORMATTING RULE: Do NOT include a standalone top-level 'Explanation' field. Always leave a blank line between different numbered meanings so they are clearly separated.\n"
             "- 'correction_note': Short explanation of typo correction if any, otherwise null."
         )
     },

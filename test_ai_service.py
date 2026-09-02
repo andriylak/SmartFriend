@@ -30,6 +30,18 @@ Hope that helps!"""
         self.assertIn("• **Pronunciation:** /koˈmiða/", formatted_md)
         self.assertIn("• **Part of Speech:** Noun", formatted_md)
 
+    def test_format_comment_with_subitems_and_blank_lines(self):
+        comment_raw = (
+            "Usage Frequency & Register: Formal\n\n"
+            "1. First definition\n"
+            "   Example: Sample sentence\n"
+            "   Translation: Переклад речення"
+        )
+        formatted_html = format_comment(comment_raw, fmt="html")
+        self.assertIn("• <b>Usage Frequency &amp; Register:</b> Formal\n\n1. First definition", formatted_html)
+        self.assertIn("   • <b>Example:</b> Sample sentence", formatted_html)
+        self.assertIn("   • <b>Translation:</b> Переклад речення", formatted_html)
+
     def test_parse_card_json_valid(self):
         raw = '{"question": "What is Python?", "answer": "A programming language."}'
         parsed = parse_card_json(raw)
