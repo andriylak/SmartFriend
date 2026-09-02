@@ -34,6 +34,20 @@ async def cmd_start_or_help(message: Message, state: FSMContext):
 @router.message(F.text.casefold() == "cancel")
 async def cmd_cancel(message: Message, state: FSMContext):
     current_state = await state.get_state()
+    state_data = await state.get_data()
+    study_msg_id = state_data.get("study_msg_id")
+    
+    if study_msg_id:
+        try:
+            await message.bot.edit_message_text(
+                chat_id=message.chat.id,
+                message_id=study_msg_id,
+                text="🏁 <b>Study session ended.</b>",
+                parse_mode="HTML"
+            )
+        except Exception:
+            pass
+
     if current_state is None:
         await message.answer("Nothing is currently active.", reply_markup=get_main_keyboard())
         return

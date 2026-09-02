@@ -1,5 +1,6 @@
 from html import escape
 import random
+import logging
 from aiogram import Router, F
 from aiogram.filters import Command
 from aiogram.types import Message, CallbackQuery
@@ -17,6 +18,8 @@ from keyboards import (
     get_evaluation_keyboard,
     get_study_ahead_keyboard,
 )
+
+logger = logging.getLogger(__name__)
 
 router = Router()
 
@@ -43,31 +46,24 @@ async def start_quiz(message: Message, state: FSMContext):
     await state.set_state(QuizStates.selecting_category)
     await state.update_data(study_all=False)
     
-    await message.answer(
+    sent_msg = await message.answer(
         "🎯 <b>Spaced Repetition Study Mode (Anki SRS)</b>\n\n"
         "Select a deck below to review your due flashcards:",
         reply_markup=get_categories_keyboard(categories, due_counts),
         parse_mode="HTML"
     )
+    await state.update_data(study_msg_id=sent_msg.message_id)
 
 @router.callback_query(QuizStates.selecting_category, F.data.startswith("quiz_cat_"))
 async def select_category(callback: CallbackQuery, state: FSMContext):
     category_data = callback.data.split("quiz_cat_")[1]
     category = None if category_data == "all" else category_data
     
-    await state.update_data(active_category=category, category_data=category_data, study_all=False)
+    await state.update_data(active_category=category, category_data=category_data, study_all=False, study_msg_id=callback.message.message_id)
     await state.set_state(QuizStates.studying)
     
-    cat_display = escape(category) if category else 'All Decks'
-    await callback.message.answer(
-        f"🏁 Starting SRS study session! Deck: <b>{cat_display}</b>\n"
-        "You can tap <b>❌ Cancel</b> at any time to end the session.",
-        reply_markup=get_cancel_keyboard(),
-        parse_mode="HTML"
-    )
-    
-    # Fetch first card
-    await send_next_card(callback.message, callback.from_user.id, category, state)
+    # Fetch first card and edit category selection message in-place
+    await send_next_card(callback.message, callback.from_user.id, category, state, edit_existing=True)
     await callback.answer()
 
 @router.callback_query(F.data.startswith("study_ahead_"))
@@ -76,16 +72,9 @@ async def process_study_ahead(callback: CallbackQuery, state: FSMContext):
     category = None if cat_param == "all" else cat_param
     
     await state.set_state(QuizStates.studying)
-    await state.update_data(active_category=category, category_data=cat_param, study_all=True)
+    await state.update_data(active_category=category, category_data=cat_param, study_all=True, study_msg_id=callback.message.message_id)
     
-    cat_display = escape(category) if category else 'All Decks'
-    await callback.message.answer(
-        f"⚡ <b>Study Ahead Mode Enabled!</b> Deck: <b>{cat_display}</b>\n"
-        "Studying all cards regardless of due dates.",
-        reply_markup=get_cancel_keyboard(),
-        parse_mode="HTML"
-    )
-    await send_next_card(callback.message, callback.from_user.id, category, state)
+    await send_next_card(callback.message, callback.from_user.id, category, state, edit_existing=True)
     await callback.answer()
 
 @router.callback_query(F.data == "study_back_decks")
@@ -99,7 +88,7 @@ async def process_study_back_decks(callback: CallbackQuery, state: FSMContext):
         
     due_counts = database.get_due_card_counts(user_id)
     await state.set_state(QuizStates.selecting_category)
-    await state.update_data(study_all=False)
+    await state.update_data(study_all=False, study_msg_id=callback.message.message_id)
     
     await callback.message.edit_text(
         "🎯 <b>Spaced Repetition Study Mode (Anki SRS)</b>\n\n"
@@ -109,7 +98,20 @@ async def process_study_back_decks(callback: CallbackQuery, state: FSMContext):
     )
     await callback.answer()
 
-async def send_next_card(message: Message, user_id: int, category: str, state: FSMContext):
+@router.callback_query(F.data == "study_stop")
+async def process_stop_study(callback: CallbackQuery, state: FSMContext):
+    await state.clear()
+    try:
+        await callback.message.edit_text(
+            "🏁 <b>Study session ended.</b>",
+            reply_markup=None,
+            parse_mode="HTML"
+        )
+    except Exception:
+        pass
+    await callback.answer("Study session ended.")
+
+async def send_next_card(message: Message, user_id: int, category: str, state: FSMContext, edit_existing: bool = True):
     state_data = await state.get_data()
     study_all = state_data.get("study_all", False)
     category_data = state_data.get("category_data", "all")
@@ -123,17 +125,24 @@ async def send_next_card(message: Message, user_id: int, category: str, state: F
                 f"You have reviewed all due cards in <b>{cat_display}</b>.\n"
                 "Great job! Check back later for your next scheduled reviews."
             )
-            await message.answer(
-                completion_text,
-                reply_markup=get_study_ahead_keyboard(category_data),
-                parse_mode="HTML"
-            )
+            markup = get_study_ahead_keyboard(category_data)
         else:
-            await message.answer(
-                f"📭 <b>No cards found in {cat_display}!</b>",
-                reply_markup=get_main_keyboard(),
-                parse_mode="HTML"
-            )
+            completion_text = f"📭 <b>No cards found in {cat_display}!</b>"
+            markup = get_study_ahead_keyboard(category_data)
+            
+        if edit_existing:
+            try:
+                await message.edit_text(completion_text, reply_markup=markup, parse_mode="HTML")
+                await state.update_data(study_msg_id=message.message_id)
+                return
+            except Exception as e:
+                logger.warning(f"Failed to edit completion text message in-place: {e}")
+                try:
+                    await message.delete()
+                except Exception:
+                    pass
+        new_msg = await message.answer(completion_text, reply_markup=markup, parse_mode="HTML")
+        await state.update_data(study_msg_id=new_msg.message_id)
         return
         
     card = due_cards[0]
@@ -158,12 +167,22 @@ async def send_next_card(message: Message, user_id: int, category: str, state: F
         f"{prompt_label}\n"
         f"{prompt_content}"
     )
+    reply_kb = get_reveal_keyboard(card["id"], is_reversed=is_reversed)
+    
+    if edit_existing:
+        try:
+            await message.edit_text(card_text, reply_markup=reply_kb, parse_mode="HTML")
+            await state.update_data(study_msg_id=message.message_id)
+            return
+        except Exception as e:
+            logger.warning(f"Failed to edit card message in-place, using delete/answer fallback: {e}")
+            try:
+                await message.delete()
+            except Exception:
+                pass
+                
     try:
-        await message.answer(
-            card_text,
-            reply_markup=get_reveal_keyboard(card["id"], is_reversed=is_reversed),
-            parse_mode="HTML"
-        )
+        new_msg = await message.answer(card_text, reply_markup=reply_kb, parse_mode="HTML")
     except Exception:
         plain_text = (
             f"📝 Quiz Card (ID: {card['id']}) {stats}\n"
@@ -171,10 +190,8 @@ async def send_next_card(message: Message, user_id: int, category: str, state: F
             f"{'Answer' if is_reversed else 'Question'}:\n"
             f"{card['question']}"
         )
-        await message.answer(
-            plain_text,
-            reply_markup=get_reveal_keyboard(card["id"], is_reversed=is_reversed)
-        )
+        new_msg = await message.answer(plain_text, reply_markup=reply_kb)
+    await state.update_data(study_msg_id=new_msg.message_id)
 
 @router.callback_query(QuizStates.studying, F.data.startswith("reveal_"))
 async def reveal_answer(callback: CallbackQuery, state: FSMContext):
@@ -222,10 +239,12 @@ async def reveal_answer(callback: CallbackQuery, state: FSMContext):
             f"{comment_html}\n\n"
             "Rate your recall difficulty:"
         )
+    
+    eval_kb = get_evaluation_keyboard(card_id)
     try:
         await callback.message.edit_text(
             revealed_text,
-            reply_markup=get_evaluation_keyboard(card_id),
+            reply_markup=eval_kb,
             parse_mode="HTML"
         )
     except Exception:
@@ -237,10 +256,20 @@ async def reveal_answer(callback: CallbackQuery, state: FSMContext):
             f"{comment_plain}\n\n"
             "Rate your recall difficulty:"
         )
-        await callback.message.edit_text(
-            plain_text,
-            reply_markup=get_evaluation_keyboard(card_id)
-        )
+        try:
+            await callback.message.edit_text(
+                plain_text,
+                reply_markup=eval_kb
+            )
+        except Exception:
+            try:
+                await callback.message.delete()
+            except Exception:
+                pass
+            new_msg = await callback.message.answer(plain_text, reply_markup=eval_kb)
+            await state.update_data(study_msg_id=new_msg.message_id)
+
+    await state.update_data(study_msg_id=callback.message.message_id)
     await callback.answer()
 
 @router.callback_query(QuizStates.studying, F.data.startswith("srs_"))
@@ -276,5 +305,5 @@ async def process_grading(callback: CallbackQuery, state: FSMContext):
     state_data = await state.get_data()
     active_category = state_data.get("active_category")
     
-    # Send next card
-    await send_next_card(callback.message, user_id, active_category, state)
+    # Edit current message in-place to display next card
+    await send_next_card(callback.message, user_id, active_category, state, edit_existing=True)

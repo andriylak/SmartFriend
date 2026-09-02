@@ -37,6 +37,8 @@ def get_reveal_keyboard(card_id: int, is_reversed: bool = False):
     text = "👁️ Show Question" if is_reversed else "👁️ Show Answer"
     cb = f"reveal_rev_{card_id}" if is_reversed else f"reveal_std_{card_id}"
     builder.add(InlineKeyboardButton(text=text, callback_data=cb))
+    builder.add(InlineKeyboardButton(text="❌ End Session", callback_data="study_stop"))
+    builder.adjust(1, 1)
     return builder.as_markup()
 
 def get_evaluation_keyboard(card_id: int):
@@ -46,9 +48,10 @@ def get_evaluation_keyboard(card_id: int):
         InlineKeyboardButton(text="🔴 Again", callback_data=f"srs_again_{card_id}"),
         InlineKeyboardButton(text="🟠 Hard", callback_data=f"srs_hard_{card_id}"),
         InlineKeyboardButton(text="🟢 Good", callback_data=f"srs_good_{card_id}"),
-        InlineKeyboardButton(text="🔵 Easy", callback_data=f"srs_easy_{card_id}")
+        InlineKeyboardButton(text="🔵 Easy", callback_data=f"srs_easy_{card_id}"),
+        InlineKeyboardButton(text="❌ End Session", callback_data="study_stop")
     )
-    builder.adjust(2, 2)
+    builder.adjust(2, 2, 1)
     return builder.as_markup()
 
 def get_study_ahead_keyboard(category: str):
@@ -56,7 +59,8 @@ def get_study_ahead_keyboard(category: str):
     cat_param = category if category else "all"
     builder.add(
         InlineKeyboardButton(text="⚡ Study All Cards Anyway", callback_data=f"study_ahead_{cat_param}"),
-        InlineKeyboardButton(text="🔙 Choose Another Deck", callback_data="study_back_decks")
+        InlineKeyboardButton(text="🔙 Choose Another Deck", callback_data="study_back_decks"),
+        InlineKeyboardButton(text="❌ End Session", callback_data="study_stop")
     )
     builder.adjust(1)
     return builder.as_markup()
