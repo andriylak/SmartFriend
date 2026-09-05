@@ -365,6 +365,20 @@ async def reveal_answer(callback: CallbackQuery, state: FSMContext):
     await state.update_data(study_msg_id=callback.message.message_id)
     await callback.answer()
 
+def format_interval_display(interval: float) -> str:
+    if not isinstance(interval, (int, float)) or interval <= 0:
+        return "10 min(s)"
+    if interval < 1.0:
+        mins = int(round(interval * 24 * 60))
+        if mins < 60:
+            return f"{max(1, mins)} min(s)"
+        else:
+            hrs = int(round(interval * 24))
+            return f"{max(1, hrs)} hour(s)"
+    else:
+        days = int(round(interval))
+        return f"{days} day(s)"
+
 @router.callback_query(QuizStates.studying, F.data.startswith("srs_"))
 @router.callback_query(QuizStates.studying, F.data.startswith("grade_"))
 async def process_grading(callback: CallbackQuery, state: FSMContext):
@@ -384,14 +398,16 @@ async def process_grading(callback: CallbackQuery, state: FSMContext):
     srs_res = database.update_card_srs(card_id, user_id, rating)
     
     interval = srs_res.get("interval_days", 0)
+    time_str = format_interval_display(interval)
+    
     if rating == "again":
-        toast_msg = "🔴 Again! Card scheduled for review now (~10m)."
+        toast_msg = f"🔴 Again! Next review in {time_str}."
     elif rating == "hard":
-        toast_msg = f"🟠 Hard! Next review in {interval} day(s)."
+        toast_msg = f"🟠 Hard! Next review in {time_str}."
     elif rating == "easy":
-        toast_msg = f"🔵 Easy! Next review in {interval} day(s)."
+        toast_msg = f"🔵 Easy! Next review in {time_str}."
     else:
-        toast_msg = f"🟢 Good! Next review in {interval} day(s)."
+        toast_msg = f"🟢 Good! Next review in {time_str}."
         
     await callback.answer(toast_msg, show_alert=False)
     
@@ -400,6 +416,7 @@ async def process_grading(callback: CallbackQuery, state: FSMContext):
     
     # Edit current message in-place to display next card
     await send_next_card(callback.message, user_id, active_category, state, edit_existing=True)
+
 
 @router.callback_query(QuizStates.studying, F.data.startswith("study_delete_"))
 @router.callback_query(F.data.startswith("study_delete_"))
