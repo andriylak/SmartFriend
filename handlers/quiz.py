@@ -16,6 +16,7 @@ from keyboards import (
     get_categories_keyboard,
     get_deck_config_list_keyboard,
     get_deck_config_menu_keyboard,
+    get_card_edit_menu_keyboard,
     get_reveal_keyboard,
     get_evaluation_keyboard,
     get_study_ahead_keyboard,
@@ -30,6 +31,11 @@ class QuizStates(StatesGroup):
     studying = State()
     configuring_deck = State()
     waiting_daily_limit = State()
+    editing_q = State()
+    editing_a = State()
+    editing_c = State()
+    editing_cat = State()
+
 
 @router.message(F.text == "🎯 Study/Quiz")
 @router.message(Command("study"))
@@ -394,3 +400,148 @@ async def process_grading(callback: CallbackQuery, state: FSMContext):
     
     # Edit current message in-place to display next card
     await send_next_card(callback.message, user_id, active_category, state, edit_existing=True)
+
+@router.callback_query(QuizStates.studying, F.data.startswith("study_delete_"))
+@router.callback_query(F.data.startswith("study_delete_"))
+async def process_study_delete(callback: CallbackQuery, state: FSMContext):
+    card_id = int(callback.data.split("study_delete_")[1])
+    user_id = callback.from_user.id
+    
+    database.delete_card(card_id, user_id)
+    await callback.answer("🗑️ Card deleted!", show_alert=False)
+    
+    state_data = await state.get_data()
+    active_category = state_data.get("active_category")
+    await send_next_card(callback.message, user_id, active_category, state, edit_existing=True)
+
+@router.callback_query(QuizStates.studying, F.data.startswith("study_edit_"))
+@router.callback_query(F.data.startswith("study_edit_"))
+async def process_study_edit(callback: CallbackQuery, state: FSMContext):
+    card_id = int(callback.data.split("study_edit_")[1])
+    user_id = callback.from_user.id
+    cards = database.get_user_cards(user_id)
+    card = next((c for c in cards if c["id"] == card_id), None)
+    
+    if not card:
+        await callback.answer("Card not found.", show_alert=True)
+        return
+        
+    await state.update_data(editing_card_id=card_id)
+    msg_text = (
+        f"✏️ <b>Edit Card #{card_id}</b> (Deck: <b>{escape(card['category'])}</b>)\n\n"
+        f"<b>Question:</b>\n{escape(card['question'])}\n\n"
+        f"<b>Answer:</b>\n{escape(card['answer'])}\n\n"
+        f"<b>Comment:</b>\n{escape(card.get('comment') or 'None')}\n\n"
+        "Select what you would like to edit:"
+    )
+    await callback.message.edit_text(msg_text, reply_markup=get_card_edit_menu_keyboard(card_id), parse_mode="HTML")
+    await callback.answer()
+
+@router.callback_query(F.data.startswith("edit_field_q_"))
+async def process_edit_field_q(callback: CallbackQuery, state: FSMContext):
+    card_id = int(callback.data.split("edit_field_q_")[1])
+    await state.set_state(QuizStates.editing_q)
+    await state.update_data(editing_card_id=card_id)
+    await callback.message.edit_text(
+        "✍️ <b>Edit Question</b>\n\nPlease reply with the new Question text for this card:",
+        reply_markup=None,
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+@router.callback_query(F.data.startswith("edit_field_a_"))
+async def process_edit_field_a(callback: CallbackQuery, state: FSMContext):
+    card_id = int(callback.data.split("edit_field_a_")[1])
+    await state.set_state(QuizStates.editing_a)
+    await state.update_data(editing_card_id=card_id)
+    await callback.message.edit_text(
+        "✍️ <b>Edit Answer</b>\n\nPlease reply with the new Answer text for this card:",
+        reply_markup=None,
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+@router.callback_query(F.data.startswith("edit_field_c_"))
+async def process_edit_field_c(callback: CallbackQuery, state: FSMContext):
+    card_id = int(callback.data.split("edit_field_c_")[1])
+    await state.set_state(QuizStates.editing_c)
+    await state.update_data(editing_card_id=card_id)
+    await callback.message.edit_text(
+        "✍️ <b>Edit Comment</b>\n\nPlease reply with the new Comment text for this card (or reply '-' to clear):",
+        reply_markup=None,
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+@router.callback_query(F.data.startswith("edit_field_cat_"))
+async def process_edit_field_cat(callback: CallbackQuery, state: FSMContext):
+    card_id = int(callback.data.split("edit_field_cat_")[1])
+    await state.set_state(QuizStates.editing_cat)
+    await state.update_data(editing_card_id=card_id)
+    await callback.message.edit_text(
+        "📁 <b>Change Deck / Category</b>\n\nPlease reply with the new Category / Deck name for this card:",
+        reply_markup=None,
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+@router.message(QuizStates.editing_q)
+async def save_edited_q(message: Message, state: FSMContext):
+    state_data = await state.get_data()
+    card_id = state_data.get("editing_card_id")
+    user_id = message.from_user.id
+    new_text = message.text.strip()
+    
+    database.update_card(card_id, user_id, question=new_text)
+    await state.set_state(QuizStates.studying)
+    await message.answer("✅ Question updated!", parse_mode="HTML")
+    active_category = state_data.get("active_category")
+    await send_next_card(message, user_id, active_category, state, edit_existing=False)
+
+@router.message(QuizStates.editing_a)
+async def save_edited_a(message: Message, state: FSMContext):
+    state_data = await state.get_data()
+    card_id = state_data.get("editing_card_id")
+    user_id = message.from_user.id
+    new_text = message.text.strip()
+    
+    database.update_card(card_id, user_id, answer=new_text)
+    await state.set_state(QuizStates.studying)
+    await message.answer("✅ Answer updated!", parse_mode="HTML")
+    active_category = state_data.get("active_category")
+    await send_next_card(message, user_id, active_category, state, edit_existing=False)
+
+@router.message(QuizStates.editing_c)
+async def save_edited_c(message: Message, state: FSMContext):
+    state_data = await state.get_data()
+    card_id = state_data.get("editing_card_id")
+    user_id = message.from_user.id
+    new_text = "" if message.text.strip() == "-" else message.text.strip()
+    
+    database.update_card(card_id, user_id, comment=new_text)
+    await state.set_state(QuizStates.studying)
+    await message.answer("✅ Comment updated!", parse_mode="HTML")
+    active_category = state_data.get("active_category")
+    await send_next_card(message, user_id, active_category, state, edit_existing=False)
+
+@router.message(QuizStates.editing_cat)
+async def save_edited_cat(message: Message, state: FSMContext):
+    state_data = await state.get_data()
+    card_id = state_data.get("editing_card_id")
+    user_id = message.from_user.id
+    new_cat = message.text.strip()
+    
+    database.update_card(card_id, user_id, category=new_cat)
+    await state.set_state(QuizStates.studying)
+    await message.answer(f"✅ Card moved to deck <b>{escape(new_cat)}</b>!", parse_mode="HTML")
+    active_category = state_data.get("active_category")
+    await send_next_card(message, user_id, active_category, state, edit_existing=False)
+
+@router.callback_query(F.data == "study_resume")
+async def process_study_resume(callback: CallbackQuery, state: FSMContext):
+    await state.set_state(QuizStates.studying)
+    state_data = await state.get_data()
+    active_category = state_data.get("active_category")
+    await send_next_card(callback.message, callback.from_user.id, active_category, state, edit_existing=True)
+    await callback.answer()
+

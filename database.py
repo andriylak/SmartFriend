@@ -508,3 +508,36 @@ def search_user_cards(user_id: int, query: str, category: str = None):
     scored_cards.sort(key=lambda item: item[0], reverse=True)
     return [card for score, card in scored_cards[:5]]
 
+def update_card(card_id: int, user_id: int, question: str = None, answer: str = None, comment: str = None, category: str = None) -> bool:
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    fields = []
+    values = []
+    if question is not None:
+        fields.append("question = ?")
+        values.append(question)
+    if answer is not None:
+        fields.append("answer = ?")
+        values.append(answer)
+    if comment is not None:
+        fields.append("comment = ?")
+        values.append(comment)
+    if category is not None:
+        fields.append("category = ?")
+        values.append(category)
+        
+    if not fields:
+        conn.close()
+        return False
+        
+    query = f"UPDATE cards SET {', '.join(fields)} WHERE id = ? AND user_id = ?"
+    values.extend([card_id, user_id])
+    
+    cursor.execute(query, tuple(values))
+    changes = conn.total_changes
+    conn.commit()
+    conn.close()
+    return changes > 0
+
+
