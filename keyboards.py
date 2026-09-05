@@ -148,7 +148,26 @@ def get_categories_keyboard(categories: list, due_counts: dict = None):
         cat_due = counts.get(cat, 0)
         builder.add(InlineKeyboardButton(text=f"📁 {cat} ({cat_due} due)", callback_data=f"quiz_cat_{cat}"))
         
+    builder.add(InlineKeyboardButton(text="⚙️ Configure Decks", callback_data="quiz_cfg_list"))
     builder.adjust(1) # one button per row
+    return builder.as_markup()
+
+def get_deck_config_list_keyboard(categories: list):
+    builder = InlineKeyboardBuilder()
+    for cat in categories:
+        builder.add(InlineKeyboardButton(text=f"⚙️ {cat}", callback_data=f"cfg_deck_{cat}"))
+    builder.add(InlineKeyboardButton(text="🔙 Back to Study", callback_data="study_back_decks"))
+    builder.adjust(1)
+    return builder.as_markup()
+
+def get_deck_config_menu_keyboard(category: str):
+    builder = InlineKeyboardBuilder()
+    builder.add(
+        InlineKeyboardButton(text="🔢 Change Daily New Limit", callback_data=f"cfg_limit_{category}"),
+        InlineKeyboardButton(text="🤖 Change AI Generator Preset", callback_data=f"cfg_preset_{category}"),
+        InlineKeyboardButton(text="🔙 Back to Deck List", callback_data="quiz_cfg_list")
+    )
+    builder.adjust(1)
     return builder.as_markup()
 
 def get_category_selection_reply_keyboard(categories: list):
@@ -206,6 +225,7 @@ def get_pagination_keyboard(category: str, current_page: int, total_pages: int):
     builder.row(InlineKeyboardButton(text="🔙 Change Deck", callback_data="list_back_decks"))
     
     return builder.as_markup()
+
 
 
 

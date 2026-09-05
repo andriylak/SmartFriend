@@ -28,8 +28,18 @@ def init_db():
             source_language TEXT,
             target_language TEXT,
             custom_prompt TEXT,
+            daily_new_limit INTEGER DEFAULT 20,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             PRIMARY KEY (user_id, category)
+        )
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS daily_new_cards_log (
+            user_id INTEGER NOT NULL,
+            category TEXT NOT NULL,
+            card_id INTEGER NOT NULL,
+            studied_date TEXT NOT NULL,
+            PRIMARY KEY (user_id, category, card_id, studied_date)
         )
     """)
     # Migration check for existing databases
@@ -37,6 +47,8 @@ def init_db():
     columns = [col[1] for col in cursor.fetchall()]
     if "source_language" not in columns:
         cursor.execute("ALTER TABLE deck_settings ADD COLUMN source_language TEXT")
+    if "daily_new_limit" not in columns:
+        cursor.execute("ALTER TABLE deck_settings ADD COLUMN daily_new_limit INTEGER DEFAULT 20")
         
     cursor.execute("PRAGMA table_info(cards)")
     card_columns = [col[1] for col in cursor.fetchall()]
@@ -125,6 +137,24 @@ def get_user_cards(user_id: int, category: str = None):
         for row in rows
     ]
 
+def get_new_cards_studied_today(user_id: int, category: str = None) -> int:
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    if category:
+        cursor.execute(
+            "SELECT COUNT(DISTINCT card_id) FROM daily_new_cards_log WHERE user_id = ? AND category = ? AND studied_date = date('now', 'localtime')",
+            (user_id, category)
+        )
+    else:
+        cursor.execute(
+            "SELECT COUNT(DISTINCT card_id) FROM daily_new_cards_log WHERE user_id = ? AND studied_date = date('now', 'localtime')",
+            (user_id,)
+        )
+    row = cursor.fetchone()
+    count = row[0] if row else 0
+    conn.close()
+    return count
+
 def get_due_cards(user_id: int, category: str = None, study_all: bool = False):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
@@ -139,29 +169,66 @@ def get_due_cards(user_id: int, category: str = None, study_all: bool = False):
                 "SELECT id, question, answer, comment, category, correct_count, incorrect_count, next_review_at, interval_days, ease_factor, repetition_count, direction FROM cards WHERE user_id = ? ORDER BY RANDOM()",
                 (user_id,)
             )
+        rows = cursor.fetchall()
+        conn.close()
     else:
-        order_by_srs = """
-            ORDER BY 
-                CASE 
-                    WHEN (correct_count > 0 OR incorrect_count > 0) AND interval_days < 1.0 THEN 0
-                    WHEN repetition_count > 0 THEN 1
-                    ELSE 2
-                END ASC,
-                interval_days ASC,
-                RANDOM()
-        """
         if category:
-            cursor.execute(
-                "SELECT id, question, answer, comment, category, correct_count, incorrect_count, next_review_at, interval_days, ease_factor, repetition_count, direction FROM cards WHERE user_id = ? AND category = ? AND (next_review_at IS NULL OR next_review_at <= CURRENT_TIMESTAMP)" + order_by_srs,
-                (user_id, category)
-            )
+            categories_to_check = [category]
         else:
+            cursor.execute("SELECT DISTINCT category FROM cards WHERE user_id = ?", (user_id,))
+            categories_to_check = [r[0] for r in cursor.fetchall()]
+
+        rows = []
+        for cat in categories_to_check:
+            # 1. Fetch review and learning cards (cards that have already been answered at least once)
             cursor.execute(
-                "SELECT id, question, answer, comment, category, correct_count, incorrect_count, next_review_at, interval_days, ease_factor, repetition_count, direction FROM cards WHERE user_id = ? AND (next_review_at IS NULL OR next_review_at <= CURRENT_TIMESTAMP)" + order_by_srs,
-                (user_id,)
+                """
+                SELECT id, question, answer, comment, category, correct_count, incorrect_count, next_review_at, interval_days, ease_factor, repetition_count, direction 
+                FROM cards 
+                WHERE user_id = ? AND category = ? 
+                  AND (correct_count > 0 OR incorrect_count > 0 OR repetition_count > 0)
+                  AND (next_review_at IS NULL OR next_review_at <= CURRENT_TIMESTAMP)
+                ORDER BY 
+                    CASE 
+                        WHEN interval_days < 1.0 THEN 0
+                        ELSE 1
+                    END ASC,
+                    interval_days ASC,
+                    RANDOM()
+                """,
+                (user_id, cat)
             )
-    rows = cursor.fetchall()
-    conn.close()
+            rows.extend(cursor.fetchall())
+
+            # 2. Check per-deck daily new cards limit
+            setting = get_deck_setting(user_id, cat)
+            limit = setting.get("daily_new_limit", 20) if setting else 20
+            studied_today = get_new_cards_studied_today(user_id, cat)
+
+            
+            if limit <= 0:
+                fetch_limit = -1
+            else:
+                fetch_limit = max(0, limit - studied_today)
+
+            if fetch_limit != 0:
+                limit_clause = f" LIMIT {fetch_limit}" if fetch_limit > 0 else ""
+                cursor.execute(
+                    f"""
+                    SELECT id, question, answer, comment, category, correct_count, incorrect_count, next_review_at, interval_days, ease_factor, repetition_count, direction 
+                    FROM cards 
+                    WHERE user_id = ? AND category = ? 
+                      AND correct_count = 0 AND incorrect_count = 0 AND repetition_count = 0 
+                      AND (next_review_at IS NULL OR next_review_at <= CURRENT_TIMESTAMP)
+                    ORDER BY id ASC
+                    {limit_clause}
+                    """,
+                    (user_id, cat)
+                )
+                rows.extend(cursor.fetchall())
+
+        conn.close()
+
     return [
         {
             "id": row[0],
@@ -183,21 +250,19 @@ def get_due_cards(user_id: int, category: str = None, study_all: bool = False):
 def get_due_card_counts(user_id: int):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    cursor.execute(
-        "SELECT category, COUNT(*) FROM cards WHERE user_id = ? AND (next_review_at IS NULL OR next_review_at <= CURRENT_TIMESTAMP) GROUP BY category",
-        (user_id,)
-    )
-    rows = cursor.fetchall()
-    counts = {row[0]: row[1] for row in rows}
-    
-    cursor.execute(
-        "SELECT COUNT(*) FROM cards WHERE user_id = ? AND (next_review_at IS NULL OR next_review_at <= CURRENT_TIMESTAMP)",
-        (user_id,)
-    )
-    total_due = cursor.fetchone()[0]
-    counts["_all_"] = total_due
-    
+    cursor.execute("SELECT DISTINCT category FROM cards WHERE user_id = ?", (user_id,))
+    categories = [r[0] for r in cursor.fetchall()]
     conn.close()
+
+    counts = {}
+    total_due = 0
+    for cat in categories:
+        due_cards = get_due_cards(user_id, category=cat, study_all=False)
+        cat_count = len(due_cards)
+        counts[cat] = cat_count
+        total_due += cat_count
+
+    counts["_all_"] = total_due
     return counts
 
 def get_random_card(user_id: int, category: str = None):
@@ -263,7 +328,7 @@ def update_card_srs(card_id: int, user_id: int, rating: str) -> dict:
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute(
-        "SELECT interval_days, ease_factor, repetition_count, correct_count, incorrect_count FROM cards WHERE id = ? AND user_id = ?",
+        "SELECT interval_days, ease_factor, repetition_count, correct_count, incorrect_count, category FROM cards WHERE id = ? AND user_id = ?",
         (card_id, user_id)
     )
     row = cursor.fetchone()
@@ -276,35 +341,51 @@ def update_card_srs(card_id: int, user_id: int, rating: str) -> dict:
     reps = row[2] or 0
     correct_count = row[3] or 0
     incorrect_count = row[4] or 0
+    category = row[5] or "General"
+
+    # Track brand-new cards introduced today
+    if reps == 0 and correct_count == 0 and incorrect_count == 0 and interval == 0.0:
+        cursor.execute(
+            "INSERT OR IGNORE INTO daily_new_cards_log (user_id, category, card_id, studied_date) VALUES (?, ?, ?, date('now', 'localtime'))",
+            (user_id, category, card_id)
+        )
 
     if rating == "again":
         reps = 0
-        interval = 0.007  # ~10 minutes / due now
+        interval = 0.007  # ~10 minutes
         ease = max(1.3, round(ease - 0.2, 2))
         incorrect_count += 1
     elif rating == "hard":
-        reps = reps + 1 if reps > 0 else 1
-        interval = 1.0 if interval == 0 else round(interval * 1.2, 2)
-        ease = max(1.3, round(ease - 0.15, 2))
+        if interval < 1.0:
+            interval = 0.007
+            reps = 0
+        else:
+            reps += 1
+            interval = float(max(int(round(interval * 1.2)), int(round(interval)) + 1))
+            ease = max(1.3, round(ease - 0.15, 2))
         correct_count += 1
     elif rating == "good":
-        reps += 1
-        if reps == 1:
+        if interval < 1.0:
+            reps = 1
             interval = 1.0
-        elif reps == 2:
+        elif reps == 1:
+            reps = 2
             interval = 6.0
         else:
-            interval = round(interval * ease, 2)
+            reps += 1
+            interval = float(int(round(interval * ease)))
         correct_count += 1
     elif rating == "easy":
-        reps += 1
-        if reps == 1:
+        if interval < 1.0:
+            reps = 1
             interval = 4.0
-        elif reps == 2:
+        elif reps == 1:
+            reps = 2
             interval = 10.0
         else:
-            interval = round(interval * ease * 1.3, 2)
-        ease = round(ease + 0.15, 2)
+            reps += 1
+            interval = float(int(round(interval * ease * 1.3)))
+            ease = round(ease + 0.15, 2)
         correct_count += 1
 
     cursor.execute(
@@ -341,21 +422,26 @@ def get_user_categories(user_id: int):
     conn.close()
     return [row[0] for row in rows]
 
-def save_deck_setting(user_id: int, category: str, preset_key: str, source_language: str = None, target_language: str = None, custom_prompt: str = None):
+def save_deck_setting(user_id: int, category: str, preset_key: str = "general", source_language: str = None, target_language: str = None, custom_prompt: str = None, daily_new_limit: int = None):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
+    if daily_new_limit is None:
+        existing = get_deck_setting(user_id, category)
+        daily_new_limit = existing.get("daily_new_limit", 20) if existing else 20
+
     cursor.execute(
         """
-        INSERT INTO deck_settings (user_id, category, preset_key, source_language, target_language, custom_prompt, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        INSERT INTO deck_settings (user_id, category, preset_key, source_language, target_language, custom_prompt, daily_new_limit, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
         ON CONFLICT(user_id, category) DO UPDATE SET
             preset_key=excluded.preset_key,
             source_language=excluded.source_language,
             target_language=excluded.target_language,
             custom_prompt=excluded.custom_prompt,
+            daily_new_limit=excluded.daily_new_limit,
             updated_at=CURRENT_TIMESTAMP
         """,
-        (user_id, category, preset_key, source_language, target_language, custom_prompt)
+        (user_id, category, preset_key, source_language, target_language, custom_prompt, daily_new_limit)
     )
     conn.commit()
     conn.close()
@@ -364,7 +450,7 @@ def get_deck_setting(user_id: int, category: str):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute(
-        "SELECT preset_key, source_language, target_language, custom_prompt FROM deck_settings WHERE user_id = ? AND category = ?",
+        "SELECT preset_key, source_language, target_language, custom_prompt, daily_new_limit FROM deck_settings WHERE user_id = ? AND category = ?",
         (user_id, category)
     )
     row = cursor.fetchone()
@@ -374,9 +460,12 @@ def get_deck_setting(user_id: int, category: str):
             "preset_key": row[0],
             "source_language": row[1],
             "target_language": row[2],
-            "custom_prompt": row[3]
+            "custom_prompt": row[3],
+            "daily_new_limit": row[4] if row[4] is not None else 20
         }
     return None
+
+
 
 def search_user_cards(user_id: int, query: str, category: str = None):
     cards = get_user_cards(user_id, category if category != "all" else None)

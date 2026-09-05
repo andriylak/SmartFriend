@@ -215,5 +215,52 @@ class TestDatabase(unittest.TestCase):
         # The failed card must be first because it is in Tier 0 (Learning)
         self.assertEqual(due_prioritized[0]["id"], failed_id)
 
+    def test_srs_again_hard_good_progression(self):
+        user_id = 70001
+        card_id = database.add_card(user_id, "Q_SRS", "A_SRS", "DeckSRS", create_pair=False)
+        
+        # 1. Answer 'again' -> learning step
+        res1 = database.update_card_srs(card_id, user_id, "again")
+        self.assertEqual(res1["interval_days"], 0.007)
+        self.assertEqual(res1["repetition_count"], 0)
+
+        # 2. Answer 'hard' while in learning step -> stays in learning step, reps=0
+        res2 = database.update_card_srs(card_id, user_id, "hard")
+        self.assertEqual(res2["interval_days"], 0.007)
+        self.assertEqual(res2["repetition_count"], 0)
+
+        # 3. Answer 'good' -> graduates out of learning step cleanly to 1.0 day
+        res3 = database.update_card_srs(card_id, user_id, "good")
+        self.assertEqual(res3["interval_days"], 1.0)
+        self.assertEqual(res3["repetition_count"], 1)
+
+        # 4. Next 'good' -> 6.0 days (whole integer days)
+        res4 = database.update_card_srs(card_id, user_id, "good")
+        self.assertEqual(res4["interval_days"], 6.0)
+        self.assertEqual(res4["repetition_count"], 2)
+
+    def test_daily_new_cards_limit(self):
+        user_id = 70002
+        cat = "DeckLimit"
+        # Add 5 cards
+        c_ids = []
+        for i in range(5):
+            c_id = database.add_card(user_id, f"Q_Lim_{i}", f"A_Lim_{i}", cat, create_pair=False)
+            c_ids.append(c_id)
+
+        # Set daily new limit to 2
+        database.save_deck_setting(user_id, cat, daily_new_limit=2)
+        
+        due = database.get_due_cards(user_id, cat)
+        self.assertEqual(len(due), 2)  # Capped at 2 new cards
+
+        # Study 1 card
+        database.update_card_srs(c_ids[0], user_id, "good")
+
+        # Now 1 new card studied today, limit is 2, so 1 remaining new card + 0 review cards due
+        due_after = database.get_due_cards(user_id, cat)
+        self.assertEqual(len(due_after), 1)
+
 if __name__ == "__main__":
     unittest.main()
+

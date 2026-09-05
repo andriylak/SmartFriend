@@ -14,6 +14,8 @@ from keyboards import (
     get_main_keyboard,
     get_cancel_keyboard,
     get_categories_keyboard,
+    get_deck_config_list_keyboard,
+    get_deck_config_menu_keyboard,
     get_reveal_keyboard,
     get_evaluation_keyboard,
     get_study_ahead_keyboard,
@@ -26,6 +28,8 @@ router = Router()
 class QuizStates(StatesGroup):
     selecting_category = State()
     studying = State()
+    configuring_deck = State()
+    waiting_daily_limit = State()
 
 @router.message(F.text == "🎯 Study/Quiz")
 @router.message(Command("study"))
@@ -54,6 +58,89 @@ async def start_quiz(message: Message, state: FSMContext):
     )
     await state.update_data(study_msg_id=sent_msg.message_id)
 
+@router.callback_query(QuizStates.selecting_category, F.data == "quiz_cfg_list")
+@router.callback_query(F.data == "quiz_cfg_list")
+async def process_quiz_cfg_list(callback: CallbackQuery, state: FSMContext):
+    user_id = callback.from_user.id
+    categories = database.get_user_categories(user_id)
+    await state.set_state(QuizStates.configuring_deck)
+    await callback.message.edit_text(
+        "⚙️ <b>Configure Deck Settings</b>\n\n"
+        "Select a deck below to adjust its daily new card limit and settings:",
+        reply_markup=get_deck_config_list_keyboard(categories),
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+@router.callback_query(F.data.startswith("cfg_deck_"))
+async def process_cfg_deck(callback: CallbackQuery, state: FSMContext):
+    user_id = callback.from_user.id
+    category = callback.data.split("cfg_deck_")[1]
+    setting = database.get_deck_setting(user_id, category)
+    studied_today = database.get_new_cards_studied_today(user_id, category)
+    
+    limit = setting.get("daily_new_limit", 20)
+    limit_str = "Unlimited" if limit <= 0 else f"{limit} cards/day"
+    preset = setting.get("preset_key", "general")
+
+    await state.update_data(active_config_deck=category)
+    await callback.message.edit_text(
+        f"⚙️ <b>Deck Settings: {escape(category)}</b>\n\n"
+        f"• 🆕 <b>Daily New Limit:</b> {limit_str} (studied today: {studied_today})\n"
+        f"• 🤖 <b>AI Preset:</b> {escape(preset)}\n\n"
+        "Choose an option below to update deck settings:",
+        reply_markup=get_deck_config_menu_keyboard(category),
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+@router.callback_query(F.data.startswith("cfg_limit_"))
+async def process_cfg_limit(callback: CallbackQuery, state: FSMContext):
+    category = callback.data.split("cfg_limit_")[1]
+    await state.set_state(QuizStates.waiting_daily_limit)
+    await state.update_data(active_config_deck=category)
+    
+    await callback.message.edit_text(
+        f"🔢 <b>Set Daily New Cards Limit for '{escape(category)}'</b>\n\n"
+        "Please type a number for how many new cards you want to study each day in this deck.\n\n"
+        "• Reply with <b>10</b>, <b>20</b>, <b>50</b>, etc.\n"
+        "• Reply with <b>0</b> for unlimited new cards.",
+        reply_markup=None,
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+@router.message(QuizStates.waiting_daily_limit)
+async def process_daily_limit_input(message: Message, state: FSMContext):
+    text = message.text.strip()
+    if not text.isdigit():
+        await message.answer("⚠️ Please reply with a valid integer number (e.g. 20 or 0).")
+        return
+        
+    new_limit = int(text)
+    state_data = await state.get_data()
+    category = state_data.get("active_config_deck", "General")
+    user_id = message.from_user.id
+    
+    database.save_deck_setting(user_id, category, daily_new_limit=new_limit)
+    
+    await state.set_state(QuizStates.selecting_category)
+    limit_display = "Unlimited" if new_limit <= 0 else f"{new_limit} cards/day"
+    
+    await message.answer(
+        f"✅ Daily new card limit for <b>{escape(category)}</b> set to <b>{limit_display}</b>.",
+        reply_markup=get_deck_config_menu_keyboard(category),
+        parse_mode="HTML"
+    )
+
+@router.callback_query(F.data.startswith("cfg_preset_"))
+async def process_cfg_preset(callback: CallbackQuery, state: FSMContext):
+    category = callback.data.split("cfg_preset_")[1]
+    await callback.answer(
+        f"To change AI presets for '{category}', create an AI card in '{category}' and select your preset.",
+        show_alert=True
+    )
+
 @router.callback_query(QuizStates.selecting_category, F.data.startswith("quiz_cat_"))
 async def select_category(callback: CallbackQuery, state: FSMContext):
     category_data = callback.data.split("quiz_cat_")[1]
@@ -62,7 +149,6 @@ async def select_category(callback: CallbackQuery, state: FSMContext):
     await state.update_data(active_category=category, category_data=category_data, study_all=False, study_msg_id=callback.message.message_id)
     await state.set_state(QuizStates.studying)
     
-    # Fetch first card and edit category selection message in-place
     await send_next_card(callback.message, callback.from_user.id, category, state, edit_existing=True)
     await callback.answer()
 
@@ -144,6 +230,7 @@ async def send_next_card(message: Message, user_id: int, category: str, state: F
         new_msg = await message.answer(completion_text, reply_markup=markup, parse_mode="HTML")
         await state.update_data(study_msg_id=new_msg.message_id)
         return
+
         
     card = due_cards[0]
     is_reversed = card.get("direction") == "reverse"
