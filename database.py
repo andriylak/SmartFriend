@@ -556,6 +556,27 @@ def update_card(card_id: int, user_id: int, question: str = None, answer: str = 
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
+    # 1. Fetch current card info to check for reverse counterpart
+    cursor.execute(
+        "SELECT question, answer, comment, category FROM cards WHERE id = ? AND user_id = ?",
+        (card_id, user_id)
+    )
+    row = cursor.fetchone()
+    if not row:
+        conn.close()
+        return False
+
+    old_q, old_a, old_comm, old_cat = row
+
+    # 2. Find counterpart reverse card if it exists
+    cursor.execute(
+        "SELECT id FROM cards WHERE user_id = ? AND category = ? AND question = ? AND answer = ?",
+        (user_id, old_cat, old_a, old_q)
+    )
+    counterpart_rows = cursor.fetchall()
+    counterpart_ids = [r[0] for r in counterpart_rows if r[0] != card_id]
+
+    # 3. Update primary card
     fields = []
     values = []
     if question is not None:
@@ -577,11 +598,32 @@ def update_card(card_id: int, user_id: int, question: str = None, answer: str = 
         
     query = f"UPDATE cards SET {', '.join(fields)} WHERE id = ? AND user_id = ?"
     values.extend([card_id, user_id])
-    
     cursor.execute(query, tuple(values))
-    changes = conn.total_changes
+
+    # 4. Also keep reverse counterpart card in sync if it exists
+    if counterpart_ids:
+        cp_fields = []
+        cp_values = []
+        if question is not None:
+            cp_fields.append("answer = ?")
+            cp_values.append(question)
+        if answer is not None:
+            cp_fields.append("question = ?")
+            cp_values.append(answer)
+        if comment is not None:
+            cp_fields.append("comment = ?")
+            cp_values.append(comment)
+        if category is not None:
+            cp_fields.append("category = ?")
+            cp_values.append(category)
+
+        if cp_fields:
+            for c_id in counterpart_ids:
+                cp_query = f"UPDATE cards SET {', '.join(cp_fields)} WHERE id = ? AND user_id = ?"
+                cursor.execute(cp_query, tuple(cp_values + [c_id, user_id]))
+
     conn.commit()
     conn.close()
-    return changes > 0
+    return True
 
 

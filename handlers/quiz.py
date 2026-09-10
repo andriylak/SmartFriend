@@ -3,7 +3,8 @@ import random
 import logging
 from aiogram import Router, F
 from aiogram.filters import Command
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import Message, CallbackQuery, InlineKeyboardButton
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 
@@ -431,128 +432,213 @@ async def process_study_delete(callback: CallbackQuery, state: FSMContext):
     active_category = state_data.get("active_category")
     await send_next_card(callback.message, user_id, active_category, state, edit_existing=True)
 
+def format_card_edit_menu_text(card: dict, status_prefix: str = "") -> str:
+    prefix = f"{status_prefix}\n\n" if status_prefix else ""
+    comment_val = card.get('comment') or 'None'
+    return (
+        f"{prefix}✏️ <b>Edit Card #{card['id']}</b> (Deck: <b>{escape(card['category'])}</b>)\n\n"
+        f"<b>Question:</b>\n{escape(card['question'])}\n\n"
+        f"<b>Answer:</b>\n{escape(card['answer'])}\n\n"
+        f"<b>Comment:</b>\n{escape(comment_val)}\n\n"
+        "Select what you would like to edit (or tap <b>Back to Study</b> when done):"
+    )
+
+async def send_card_edit_menu(target_msg, user_id: int, card_id: int, status_prefix: str = "", edit_existing: bool = False):
+    cards = database.get_user_cards(user_id)
+    card = next((c for c in cards if c["id"] == card_id), None)
+    if not card:
+        text = "❌ Card not found."
+        if edit_existing and hasattr(target_msg, "edit_text"):
+            await target_msg.edit_text(text)
+        else:
+            await target_msg.answer(text)
+        return
+
+    msg_text = format_card_edit_menu_text(card, status_prefix=status_prefix)
+    markup = get_card_edit_menu_keyboard(card_id)
+    if edit_existing and hasattr(target_msg, "edit_text"):
+        try:
+            await target_msg.edit_text(msg_text, reply_markup=markup, parse_mode="HTML")
+            return
+        except Exception:
+            pass
+    await target_msg.answer(msg_text, reply_markup=markup, parse_mode="HTML")
+
 @router.callback_query(QuizStates.studying, F.data.startswith("study_edit_"))
 @router.callback_query(F.data.startswith("study_edit_"))
 async def process_study_edit(callback: CallbackQuery, state: FSMContext):
     card_id = int(callback.data.split("study_edit_")[1])
     user_id = callback.from_user.id
-    cards = database.get_user_cards(user_id)
-    card = next((c for c in cards if c["id"] == card_id), None)
-    
-    if not card:
-        await callback.answer("Card not found.", show_alert=True)
-        return
-        
     await state.update_data(editing_card_id=card_id)
-    msg_text = (
-        f"✏️ <b>Edit Card #{card_id}</b> (Deck: <b>{escape(card['category'])}</b>)\n\n"
-        f"<b>Question:</b>\n{escape(card['question'])}\n\n"
-        f"<b>Answer:</b>\n{escape(card['answer'])}\n\n"
-        f"<b>Comment:</b>\n{escape(card.get('comment') or 'None')}\n\n"
-        "Select what you would like to edit:"
-    )
-    await callback.message.edit_text(msg_text, reply_markup=get_card_edit_menu_keyboard(card_id), parse_mode="HTML")
+    await state.set_state(QuizStates.studying)
+    await send_card_edit_menu(callback.message, user_id, card_id, edit_existing=True)
     await callback.answer()
 
 @router.callback_query(F.data.startswith("edit_field_q_"))
 async def process_edit_field_q(callback: CallbackQuery, state: FSMContext):
     card_id = int(callback.data.split("edit_field_q_")[1])
+    user_id = callback.from_user.id
+    cards = database.get_user_cards(user_id)
+    card = next((c for c in cards if c["id"] == card_id), None)
+    if not card:
+        await callback.answer("Card not found.", show_alert=True)
+        return
+
     await state.set_state(QuizStates.editing_q)
     await state.update_data(editing_card_id=card_id)
-    await callback.message.edit_text(
-        "✍️ <b>Edit Question</b>\n\nPlease reply with the new Question text for this card:",
-        reply_markup=None,
-        parse_mode="HTML"
+
+    cancel_kb = InlineKeyboardBuilder()
+    cancel_kb.add(InlineKeyboardButton(text="🔙 Back to Card", callback_data=f"study_edit_{card_id}"))
+
+    current_q = card["question"]
+    text = (
+        f"✍️ <b>Edit Question</b> (Card #{card_id})\n\n"
+        "<b>Current Question:</b> (tap to copy)\n"
+        f"<code>{escape(current_q)}</code>\n\n"
+        "Please reply with the updated Question text (or copy, edit, and send):"
     )
+    await callback.message.edit_text(text, reply_markup=cancel_kb.as_markup(), parse_mode="HTML")
     await callback.answer()
 
 @router.callback_query(F.data.startswith("edit_field_a_"))
 async def process_edit_field_a(callback: CallbackQuery, state: FSMContext):
     card_id = int(callback.data.split("edit_field_a_")[1])
+    user_id = callback.from_user.id
+    cards = database.get_user_cards(user_id)
+    card = next((c for c in cards if c["id"] == card_id), None)
+    if not card:
+        await callback.answer("Card not found.", show_alert=True)
+        return
+
     await state.set_state(QuizStates.editing_a)
     await state.update_data(editing_card_id=card_id)
-    await callback.message.edit_text(
-        "✍️ <b>Edit Answer</b>\n\nPlease reply with the new Answer text for this card:",
-        reply_markup=None,
-        parse_mode="HTML"
+
+    cancel_kb = InlineKeyboardBuilder()
+    cancel_kb.add(InlineKeyboardButton(text="🔙 Back to Card", callback_data=f"study_edit_{card_id}"))
+
+    current_a = card["answer"]
+    text = (
+        f"✍️ <b>Edit Answer</b> (Card #{card_id})\n\n"
+        "<b>Current Answer:</b> (tap to copy)\n"
+        f"<code>{escape(current_a)}</code>\n\n"
+        "Please reply with the updated Answer text (or copy, edit, and send):"
     )
+    await callback.message.edit_text(text, reply_markup=cancel_kb.as_markup(), parse_mode="HTML")
     await callback.answer()
 
 @router.callback_query(F.data.startswith("edit_field_c_"))
 async def process_edit_field_c(callback: CallbackQuery, state: FSMContext):
     card_id = int(callback.data.split("edit_field_c_")[1])
+    user_id = callback.from_user.id
+    cards = database.get_user_cards(user_id)
+    card = next((c for c in cards if c["id"] == card_id), None)
+    if not card:
+        await callback.answer("Card not found.", show_alert=True)
+        return
+
     await state.set_state(QuizStates.editing_c)
     await state.update_data(editing_card_id=card_id)
-    await callback.message.edit_text(
-        "✍️ <b>Edit Comment</b>\n\nPlease reply with the new Comment text for this card (or reply '-' to clear):",
-        reply_markup=None,
-        parse_mode="HTML"
+
+    cancel_kb = InlineKeyboardBuilder()
+    cancel_kb.add(InlineKeyboardButton(text="🔙 Back to Card", callback_data=f"study_edit_{card_id}"))
+
+    current_c = card.get("comment") or ""
+    if current_c:
+        comment_display = f"<b>Current Comment:</b> (tap to copy)\n<code>{escape(current_c)}</code>\n\n"
+    else:
+        comment_display = "<b>Current Comment:</b> <i>None</i>\n\n"
+
+    text = (
+        f"✍️ <b>Edit Comment</b> (Card #{card_id})\n\n"
+        f"{comment_display}"
+        "Please reply with the updated Comment text (or reply '-' to clear):"
     )
+    await callback.message.edit_text(text, reply_markup=cancel_kb.as_markup(), parse_mode="HTML")
     await callback.answer()
 
 @router.callback_query(F.data.startswith("edit_field_cat_"))
 async def process_edit_field_cat(callback: CallbackQuery, state: FSMContext):
     card_id = int(callback.data.split("edit_field_cat_")[1])
+    user_id = callback.from_user.id
+    cards = database.get_user_cards(user_id)
+    card = next((c for c in cards if c["id"] == card_id), None)
+    if not card:
+        await callback.answer("Card not found.", show_alert=True)
+        return
+
     await state.set_state(QuizStates.editing_cat)
     await state.update_data(editing_card_id=card_id)
-    await callback.message.edit_text(
-        "📁 <b>Change Deck / Category</b>\n\nPlease reply with the new Category / Deck name for this card:",
-        reply_markup=None,
-        parse_mode="HTML"
+
+    cancel_kb = InlineKeyboardBuilder()
+    cancel_kb.add(InlineKeyboardButton(text="🔙 Back to Card", callback_data=f"study_edit_{card_id}"))
+
+    current_cat = card["category"]
+    text = (
+        f"📁 <b>Change Deck / Category</b> (Card #{card_id})\n\n"
+        "<b>Current Deck:</b> (tap to copy)\n"
+        f"<code>{escape(current_cat)}</code>\n\n"
+        "Please reply with the new Category / Deck name for this card:"
     )
+    await callback.message.edit_text(text, reply_markup=cancel_kb.as_markup(), parse_mode="HTML")
     await callback.answer()
 
 @router.message(QuizStates.editing_q)
 async def save_edited_q(message: Message, state: FSMContext):
+    new_text = message.text.strip()
+    if not new_text:
+        await message.answer("⚠️ Question cannot be empty. Please enter valid text:")
+        return
+
     state_data = await state.get_data()
     card_id = state_data.get("editing_card_id")
     user_id = message.from_user.id
-    new_text = message.text.strip()
-    
+
     database.update_card(card_id, user_id, question=new_text)
     await state.set_state(QuizStates.studying)
-    await message.answer("✅ Question updated!", parse_mode="HTML")
-    active_category = state_data.get("active_category")
-    await send_next_card(message, user_id, active_category, state, edit_existing=False)
+    await send_card_edit_menu(message, user_id, card_id, status_prefix="✅ <b>Question updated!</b>")
 
 @router.message(QuizStates.editing_a)
 async def save_edited_a(message: Message, state: FSMContext):
+    new_text = message.text.strip()
+    if not new_text:
+        await message.answer("⚠️ Answer cannot be empty. Please enter valid text:")
+        return
+
     state_data = await state.get_data()
     card_id = state_data.get("editing_card_id")
     user_id = message.from_user.id
-    new_text = message.text.strip()
-    
+
     database.update_card(card_id, user_id, answer=new_text)
     await state.set_state(QuizStates.studying)
-    await message.answer("✅ Answer updated!", parse_mode="HTML")
-    active_category = state_data.get("active_category")
-    await send_next_card(message, user_id, active_category, state, edit_existing=False)
+    await send_card_edit_menu(message, user_id, card_id, status_prefix="✅ <b>Answer updated!</b>")
 
 @router.message(QuizStates.editing_c)
 async def save_edited_c(message: Message, state: FSMContext):
+    raw_text = message.text.strip()
+    new_text = "" if raw_text == "-" else raw_text
+
     state_data = await state.get_data()
     card_id = state_data.get("editing_card_id")
     user_id = message.from_user.id
-    new_text = "" if message.text.strip() == "-" else message.text.strip()
-    
+
     database.update_card(card_id, user_id, comment=new_text)
     await state.set_state(QuizStates.studying)
-    await message.answer("✅ Comment updated!", parse_mode="HTML")
-    active_category = state_data.get("active_category")
-    await send_next_card(message, user_id, active_category, state, edit_existing=False)
+    await send_card_edit_menu(message, user_id, card_id, status_prefix="✅ <b>Comment updated!</b>")
 
 @router.message(QuizStates.editing_cat)
 async def save_edited_cat(message: Message, state: FSMContext):
+    new_cat = message.text.strip()
+    if not new_cat:
+        await message.answer("⚠️ Deck / Category name cannot be empty. Please enter valid text:")
+        return
+
     state_data = await state.get_data()
     card_id = state_data.get("editing_card_id")
     user_id = message.from_user.id
-    new_cat = message.text.strip()
-    
+
     database.update_card(card_id, user_id, category=new_cat)
     await state.set_state(QuizStates.studying)
-    await message.answer(f"✅ Card moved to deck <b>{escape(new_cat)}</b>!", parse_mode="HTML")
-    active_category = state_data.get("active_category")
-    await send_next_card(message, user_id, active_category, state, edit_existing=False)
+    await send_card_edit_menu(message, user_id, card_id, status_prefix=f"✅ <b>Card moved to deck '{escape(new_cat)}'!</b>")
 
 @router.callback_query(F.data == "study_resume")
 async def process_study_resume(callback: CallbackQuery, state: FSMContext):

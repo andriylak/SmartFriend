@@ -16,7 +16,10 @@ from handlers.quiz import (
     process_stop_study,
     send_next_card,
     process_grading,
-    reveal_answer
+    reveal_answer,
+    process_study_edit,
+    process_edit_field_a,
+    save_edited_a
 )
 
 class TestQuizStudyMode(unittest.TestCase):
@@ -128,6 +131,82 @@ class TestQuizStudyMode(unittest.TestCase):
             self.assertIsNone(current_state)
             mock_callback.message.edit_text.assert_called_once()
             self.assertIn("Study session ended", mock_callback.message.edit_text.call_args[0][0])
+
+        asyncio.run(run_test())
+
+    @patch("database.get_user_cards")
+    def test_process_edit_field_shows_copyable_code_block(self, mock_get_user_cards):
+        mock_get_user_cards.return_value = [{
+            "id": 55,
+            "question": "What is 2+2?",
+            "answer": "Four",
+            "comment": "Math",
+            "category": "General"
+        }]
+
+        mock_callback = AsyncMock()
+        mock_callback.data = "edit_field_a_55"
+        mock_callback.from_user.id = 1000
+        mock_callback.message.edit_text = AsyncMock()
+        mock_callback.answer = AsyncMock()
+
+        async def run_test():
+            await process_edit_field_a(mock_callback, self.state)
+            state_data = await self.state.get_data()
+            self.assertEqual(state_data.get("editing_card_id"), 55)
+            self.assertEqual(await self.state.get_state(), QuizStates.editing_a)
+
+            mock_callback.message.edit_text.assert_called_once()
+            call_text = mock_callback.message.edit_text.call_args[0][0]
+            # Check copyable HTML code tag
+            self.assertIn("<code>Four</code>", call_text)
+            self.assertIn("tap to copy", call_text)
+
+            # Check back button exists
+            markup = mock_callback.message.edit_text.call_args[1].get("reply_markup")
+            buttons = [btn.callback_data for row in markup.inline_keyboard for btn in row]
+            self.assertIn("study_edit_55", buttons)
+
+        asyncio.run(run_test())
+
+    @patch("database.get_user_cards")
+    @patch("database.update_card")
+    def test_save_edited_field_remains_in_editing_menu(self, mock_update_card, mock_get_user_cards):
+        mock_get_user_cards.return_value = [{
+            "id": 55,
+            "question": "What is 2+2?",
+            "answer": "4 (four)",
+            "comment": "Math",
+            "category": "General"
+        }]
+
+        mock_message = AsyncMock()
+        mock_message.text = "4 (four)"
+        mock_message.from_user.id = 1000
+        mock_message.answer = AsyncMock()
+
+        async def run_test():
+            await self.state.set_state(QuizStates.editing_a)
+            await self.state.update_data(editing_card_id=55, active_category="General")
+
+            await save_edited_a(mock_message, self.state)
+
+            # Verify update_card was called with the new text
+            mock_update_card.assert_called_once_with(55, 1000, answer="4 (four)")
+
+            # Verify message.answer was called with the edit menu containing success message
+            mock_message.answer.assert_called_once()
+            call_text = mock_message.answer.call_args[0][0]
+            self.assertIn("Answer updated", call_text)
+            self.assertIn("Edit Card #55", call_text)
+            self.assertIn("4 (four)", call_text)
+
+            # Check markup contains edit menu buttons
+            markup = mock_message.answer.call_args[1].get("reply_markup")
+            buttons = [btn.callback_data for row in markup.inline_keyboard for btn in row]
+            self.assertIn("edit_field_q_55", buttons)
+            self.assertIn("edit_field_a_55", buttons)
+            self.assertIn("study_resume", buttons)
 
         asyncio.run(run_test())
 

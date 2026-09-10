@@ -115,6 +115,33 @@ class TestDatabase(unittest.TestCase):
         # Deleting non-existent card returns False
         self.assertFalse(database.delete_card(999999, user_id))
 
+    def test_update_card_and_paired_sync(self):
+        user_id = 11113
+        # Create paired card
+        std_id = database.add_card(user_id, "gato", "cat", "Spanish", comment="animal", create_pair=True)
+        cards = database.get_user_cards(user_id)
+        self.assertEqual(len(cards), 2)
+
+        # Update standard card's question, answer, comment, category
+        success = database.update_card(std_id, user_id, question="el gato", answer="the cat", comment="feline", category="Espanol")
+        self.assertTrue(success)
+
+        updated_cards = database.get_user_cards(user_id)
+        std_card = next(c for c in updated_cards if c["id"] == std_id)
+        rev_card = next(c for c in updated_cards if c["id"] != std_id)
+
+        # Standard card check
+        self.assertEqual(std_card["question"], "el gato")
+        self.assertEqual(std_card["answer"], "the cat")
+        self.assertEqual(std_card["comment"], "feline")
+        self.assertEqual(std_card["category"], "Espanol")
+
+        # Reverse counterpart must be kept in sync (swapped Q and A)
+        self.assertEqual(rev_card["question"], "the cat")
+        self.assertEqual(rev_card["answer"], "el gato")
+        self.assertEqual(rev_card["comment"], "feline")
+        self.assertEqual(rev_card["category"], "Espanol")
+
     def test_update_card_stats(self):
         user_id = 22222
         card_id = database.add_card(user_id, "Stats Q", "Stats A", create_pair=False)
