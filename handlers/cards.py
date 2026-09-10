@@ -917,6 +917,6 @@ async def process_delete_command(message: Message):
     
     success = database.delete_card(card_id, user_id)
     if success:
-        await message.answer(f"🗑️ Card ID **{card_id}** has been deleted.", reply_markup=get_main_keyboard(), parse_mode="Markdown")
+        await message.answer(f"🗑️ Card ID **{card_id}** (both sides) has been deleted.", reply_markup=get_main_keyboard(), parse_mode="Markdown")
     else:
         await message.answer(f"❌ Could not delete card. Card ID **{card_id}** was not found or is not owned by you.", reply_markup=get_main_keyboard(), parse_mode="Markdown")

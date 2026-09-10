@@ -321,13 +321,36 @@ def delete_card(card_id: int, user_id: int) -> bool:
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute(
-        "DELETE FROM cards WHERE id = ? AND user_id = ?",
+        "SELECT question, answer, category FROM cards WHERE id = ? AND user_id = ?",
         (card_id, user_id)
     )
-    changes = conn.total_changes
+    row = cursor.fetchone()
+    if not row:
+        conn.close()
+        return False
+
+    q, a, cat = row
+
+    # Find reverse counterpart if it exists (swapped question and answer in same category)
+    cursor.execute(
+        "SELECT id FROM cards WHERE user_id = ? AND category = ? AND question = ? AND answer = ?",
+        (user_id, cat, a, q)
+    )
+    counterpart_rows = cursor.fetchall()
+    counterpart_ids = [r[0] for r in counterpart_rows if r[0] != card_id]
+
+    # Delete primary card
+    cursor.execute("DELETE FROM cards WHERE id = ? AND user_id = ?", (card_id, user_id))
+    cursor.execute("DELETE FROM daily_new_cards_log WHERE user_id = ? AND card_id = ?", (user_id, card_id))
+
+    # Delete counterpart cards
+    for c_id in counterpart_ids:
+        cursor.execute("DELETE FROM cards WHERE id = ? AND user_id = ?", (c_id, user_id))
+        cursor.execute("DELETE FROM daily_new_cards_log WHERE user_id = ? AND card_id = ?", (user_id, c_id))
+
     conn.commit()
     conn.close()
-    return changes > 0
+    return True
 
 def update_card_stats(card_id: int, user_id: int, correct: bool):
     conn = sqlite3.connect(DB_PATH)

@@ -425,7 +425,7 @@ async def process_study_delete(callback: CallbackQuery, state: FSMContext):
     user_id = callback.from_user.id
     
     database.delete_card(card_id, user_id)
-    await callback.answer("🗑️ Card deleted!", show_alert=False)
+    await callback.answer("🗑️ Card deleted (both sides)!", show_alert=False)
     
     state_data = await state.get_data()
     active_category = state_data.get("active_category")

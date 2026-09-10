@@ -90,6 +90,31 @@ class TestDatabase(unittest.TestCase):
         cards_after = database.get_user_cards(user_id)
         self.assertEqual(len(cards_after), 0)
 
+    def test_delete_card_deletes_both_sides(self):
+        user_id = 11112
+        # Create paired card (standard + reverse)
+        std_id = database.add_card(user_id, "gato", "cat", "Spanish", create_pair=True)
+        cards = database.get_user_cards(user_id)
+        self.assertEqual(len(cards), 2)
+
+        # Deleting the standard card should delete both sides
+        success = database.delete_card(std_id, user_id)
+        self.assertTrue(success)
+        self.assertEqual(len(database.get_user_cards(user_id)), 0)
+
+        # Create another pair and test deleting via reverse card id
+        database.add_card(user_id, "perro", "dog", "Spanish", create_pair=True)
+        cards2 = database.get_user_cards(user_id)
+        self.assertEqual(len(cards2), 2)
+        rev_card = next(c for c in cards2 if c["direction"] == "reverse")
+
+        success_rev = database.delete_card(rev_card["id"], user_id)
+        self.assertTrue(success_rev)
+        self.assertEqual(len(database.get_user_cards(user_id)), 0)
+
+        # Deleting non-existent card returns False
+        self.assertFalse(database.delete_card(999999, user_id))
+
     def test_update_card_stats(self):
         user_id = 22222
         card_id = database.add_card(user_id, "Stats Q", "Stats A", create_pair=False)
