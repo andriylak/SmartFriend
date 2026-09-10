@@ -261,6 +261,62 @@ class TestDatabase(unittest.TestCase):
         due_after = database.get_due_cards(user_id, cat)
         self.assertEqual(len(due_after), 1)
 
+    def test_intraday_learning_card_due_immediately(self):
+        user_id = 70003
+        cat = "DeckIntraday"
+        card_id = database.add_card(user_id, "Q_Intraday", "A_Intraday", cat, create_pair=False)
+        
+        # Grade as 'again' -> interval 0.007 days (~10 min in the future)
+        res = database.update_card_srs(card_id, user_id, "again")
+        self.assertEqual(res["interval_days"], 0.007)
+        
+        # Verify card is returned in due cards immediately without waiting 10 minutes
+        due_cards = database.get_due_cards(user_id, cat)
+        self.assertEqual(len(due_cards), 1)
+        self.assertEqual(due_cards[0]["id"], card_id)
+        
+        # Verify get_due_card_counts also counts it
+        counts = database.get_due_card_counts(user_id)
+        self.assertEqual(counts.get(cat), 1)
+        
+        # Now grade it 'good' -> graduates to 1.0 day (due tomorrow)
+        res_good = database.update_card_srs(card_id, user_id, "good")
+        self.assertEqual(res_good["interval_days"], 1.0)
+        
+        # Now no cards should be due today
+        due_cards_graduated = database.get_due_cards(user_id, cat)
+        self.assertEqual(len(due_cards_graduated), 0)
+        
+        counts_graduated = database.get_due_card_counts(user_id)
+        self.assertEqual(counts_graduated.get(cat), 0)
+
+    def test_queue_ordering_learning_ahead_at_end(self):
+        user_id = 70004
+        cat = "DeckOrder"
+        
+        # 1. Existing review card that is due now
+        card_due = database.add_card(user_id, "Q_DueNow", "A_DueNow", cat, create_pair=False)
+        database.update_card_srs(card_due, user_id, "good") # interval 1.0 day
+        conn = sqlite3.connect(database.DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("UPDATE cards SET next_review_at = CURRENT_TIMESTAMP WHERE id = ?", (card_due,))
+        conn.commit()
+        conn.close()
+        
+        # 2. Brand new card (due now)
+        card_new = database.add_card(user_id, "Q_New", "A_New", cat, create_pair=False)
+        
+        # 3. Learning card answered 'again' (scheduled 10 mins in future)
+        card_learning = database.add_card(user_id, "Q_Learn", "A_Learn", cat, create_pair=False)
+        database.update_card_srs(card_learning, user_id, "again")
+        
+        due_queue = database.get_due_cards(user_id, cat)
+        self.assertEqual(len(due_queue), 3)
+        # Order: 1. due review card, 2. new card, 3. future learning card
+        self.assertEqual(due_queue[0]["id"], card_due)
+        self.assertEqual(due_queue[1]["id"], card_new)
+        self.assertEqual(due_queue[2]["id"], card_learning)
+
 if __name__ == "__main__":
     unittest.main()
 

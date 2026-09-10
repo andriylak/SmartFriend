@@ -178,9 +178,12 @@ def get_due_cards(user_id: int, category: str = None, study_all: bool = False):
             cursor.execute("SELECT DISTINCT category FROM cards WHERE user_id = ?", (user_id,))
             categories_to_check = [r[0] for r in cursor.fetchall()]
 
-        rows = []
+        due_review_rows = []
+        new_rows = []
+        learning_ahead_rows = []
+
         for cat in categories_to_check:
-            # 1. Fetch review and learning cards (cards that have already been answered at least once)
+            # 1. Fetch review and learning cards that are currently due (or overdue)
             cursor.execute(
                 """
                 SELECT id, question, answer, comment, category, correct_count, incorrect_count, next_review_at, interval_days, ease_factor, repetition_count, direction 
@@ -198,14 +201,13 @@ def get_due_cards(user_id: int, category: str = None, study_all: bool = False):
                 """,
                 (user_id, cat)
             )
-            rows.extend(cursor.fetchall())
+            due_review_rows.extend(cursor.fetchall())
 
             # 2. Check per-deck daily new cards limit
             setting = get_deck_setting(user_id, cat)
             limit = setting.get("daily_new_limit", 20) if setting else 20
             studied_today = get_new_cards_studied_today(user_id, cat)
 
-            
             if limit <= 0:
                 fetch_limit = -1
             else:
@@ -225,8 +227,27 @@ def get_due_cards(user_id: int, category: str = None, study_all: bool = False):
                     """,
                     (user_id, cat)
                 )
-                rows.extend(cursor.fetchall())
+                new_rows.extend(cursor.fetchall())
 
+            # 3. Fetch intraday learning cards scheduled for later today (< 1 day interval)
+            # This allows completing cards with short intervals (e.g. 10 mins) in the same session
+            cursor.execute(
+                """
+                SELECT id, question, answer, comment, category, correct_count, incorrect_count, next_review_at, interval_days, ease_factor, repetition_count, direction 
+                FROM cards 
+                WHERE user_id = ? AND category = ? 
+                  AND (correct_count > 0 OR incorrect_count > 0 OR repetition_count > 0)
+                  AND interval_days < 1.0
+                  AND next_review_at > CURRENT_TIMESTAMP
+                ORDER BY 
+                    next_review_at ASC,
+                    id ASC
+                """,
+                (user_id, cat)
+            )
+            learning_ahead_rows.extend(cursor.fetchall())
+
+        rows = due_review_rows + new_rows + learning_ahead_rows
         conn.close()
 
     return [
