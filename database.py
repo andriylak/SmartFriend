@@ -352,6 +352,30 @@ def delete_card(card_id: int, user_id: int) -> bool:
     conn.close()
     return True
 
+def delete_deck(user_id: int, category: str) -> int:
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT COUNT(*) FROM cards WHERE user_id = ? AND category = ?",
+        (user_id, category)
+    )
+    count = cursor.fetchone()[0]
+    cursor.execute(
+        "DELETE FROM cards WHERE user_id = ? AND category = ?",
+        (user_id, category)
+    )
+    cursor.execute(
+        "DELETE FROM deck_settings WHERE user_id = ? AND category = ?",
+        (user_id, category)
+    )
+    cursor.execute(
+        "DELETE FROM daily_new_cards_log WHERE user_id = ? AND category = ?",
+        (user_id, category)
+    )
+    conn.commit()
+    conn.close()
+    return count
+
 def update_card_stats(card_id: int, user_id: int, correct: bool):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()

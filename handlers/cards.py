@@ -24,7 +24,8 @@ from keyboards import (
     get_category_selection_reply_keyboard,
     get_ai_topic_keyboard,
     get_list_categories_keyboard,
-    get_pagination_keyboard
+    get_pagination_keyboard,
+    get_deck_delete_confirm_keyboard
 )
 
 logger = logging.getLogger(__name__)
@@ -920,3 +921,50 @@ async def process_delete_command(message: Message):
         await message.answer(f"🗑️ Card ID **{card_id}** (both sides) has been deleted.", reply_markup=get_main_keyboard(), parse_mode="Markdown")
     else:
         await message.answer(f"❌ Could not delete card. Card ID **{card_id}** was not found or is not owned by you.", reply_markup=get_main_keyboard(), parse_mode="Markdown")
+
+
+@router.callback_query(F.data.startswith("ask_del_deck_"))
+async def process_ask_delete_deck(callback: CallbackQuery, state: FSMContext):
+    category = callback.data.split("ask_del_deck_")[1]
+    user_id = callback.from_user.id
+    cards = database.get_user_cards(user_id, category=category)
+    count = len(cards)
+    
+    confirm_kb = get_deck_delete_confirm_keyboard(category)
+    await callback.message.edit_text(
+        f"⚠️ **Are you sure you want to delete deck '{escape(category)}'?**\n\n"
+        f"This will permanently delete all **{count} cards** in this deck, along with its custom settings and review logs.\n\n"
+        "*(This action cannot be undone!)*",
+        reply_markup=confirm_kb,
+        parse_mode="Markdown"
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("confirm_del_deck_"))
+async def process_confirm_delete_deck(callback: CallbackQuery, state: FSMContext):
+    category = callback.data.split("confirm_del_deck_")[1]
+    user_id = callback.from_user.id
+    
+    deleted_count = database.delete_deck(user_id, category)
+    await state.clear()
+    
+    categories = database.get_user_categories(user_id)
+    if categories:
+        text = (
+            f"🗑️ **Deck '{escape(category)}' deleted!**\n"
+            f"Successfully removed **{deleted_count} cards** and settings.\n\n"
+            "Please select a deck to view your flashcards:"
+        )
+        kb = get_list_categories_keyboard(categories)
+    else:
+        text = (
+            f"🗑️ **Deck '{escape(category)}' deleted!**\n"
+            f"Successfully removed **{deleted_count} cards** and settings.\n\n"
+            "📭 You don't have any remaining flashcard decks."
+        )
+        kb = None
+        
+    await callback.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
+    await callback.answer(f"Deck '{category}' deleted.")
+

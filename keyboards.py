@@ -184,6 +184,7 @@ def get_deck_config_menu_keyboard(category: str):
     builder.add(
         InlineKeyboardButton(text="🔢 Change Daily New Limit", callback_data=f"cfg_limit_{category}"),
         InlineKeyboardButton(text="🤖 Change AI Generator Preset", callback_data=f"cfg_preset_{category}"),
+        InlineKeyboardButton(text="🗑️ Delete Deck", callback_data=f"ask_del_deck_{category}"),
         InlineKeyboardButton(text="🔙 Back to Deck List", callback_data="quiz_cfg_list")
     )
     builder.adjust(1)
@@ -241,8 +242,23 @@ def get_pagination_keyboard(category: str, current_page: int, total_pages: int):
         nav_buttons.append(InlineKeyboardButton(text="Next ➡️", callback_data=f"list_page|{category}|{current_page + 1}"))
         
     builder.row(*nav_buttons)
-    builder.row(InlineKeyboardButton(text="🔙 Change Deck", callback_data="list_back_decks"))
+    if category != "all":
+        builder.row(
+            InlineKeyboardButton(text="🗑️ Delete Deck", callback_data=f"ask_del_deck_{category}"),
+            InlineKeyboardButton(text="🔙 Change Deck", callback_data="list_back_decks")
+        )
+    else:
+        builder.row(InlineKeyboardButton(text="🔙 Change Deck", callback_data="list_back_decks"))
     
+    return builder.as_markup()
+
+def get_deck_delete_confirm_keyboard(category: str):
+    builder = InlineKeyboardBuilder()
+    builder.add(
+        InlineKeyboardButton(text="⚠️ Yes, Delete Entire Deck", callback_data=f"confirm_del_deck_{category}"),
+        InlineKeyboardButton(text="❌ Cancel", callback_data="list_back_decks")
+    )
+    builder.adjust(1)
     return builder.as_markup()
 
 

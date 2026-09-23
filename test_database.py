@@ -369,6 +369,29 @@ class TestDatabase(unittest.TestCase):
         self.assertEqual(due_queue[1]["id"], card_new)
         self.assertEqual(due_queue[2]["id"], card_learning)
 
+    def test_delete_deck(self):
+        user_id = 99999
+        cat_to_delete = "DeckToDelete"
+        cat_to_keep = "DeckToKeep"
+        
+        database.add_card(user_id, "Q1", "A1", cat_to_delete, create_pair=False)
+        database.add_card(user_id, "Q2", "A2", cat_to_delete, create_pair=False)
+        database.add_card(user_id, "QK", "AK", cat_to_keep, create_pair=False)
+        database.save_deck_setting(user_id, cat_to_delete, daily_new_limit=10)
+        
+        deleted_count = database.delete_deck(user_id, cat_to_delete)
+        self.assertEqual(deleted_count, 2)
+        
+        cards_deleted = database.get_user_cards(user_id, category=cat_to_delete)
+        self.assertEqual(len(cards_deleted), 0)
+        
+        cards_kept = database.get_user_cards(user_id, category=cat_to_keep)
+        self.assertEqual(len(cards_kept), 1)
+        
+        setting = database.get_deck_setting(user_id, cat_to_delete)
+        self.assertIsNone(setting)
+
 if __name__ == "__main__":
     unittest.main()
+
 
