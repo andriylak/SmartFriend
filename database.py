@@ -1,5 +1,6 @@
 import sqlite3
 import os
+import re
 import difflib
 
 DB_PATH = "learning_bot.db"
@@ -533,7 +534,99 @@ def get_deck_setting(user_id: int, category: str):
         }
     return None
 
+COMMON_ARTICLES = {
+    # English
+    "the", "a", "an", "to",
+    # Spanish
+    "el", "la", "los", "las", "un", "una", "unos", "unas",
+    # French
+    "le", "la", "les", "un", "une", "des", "l", "d",
+    # German
+    "der", "die", "das", "ein", "eine", "einen", "einem", "einer", "eines",
+    # Italian
+    "il", "lo", "la", "i", "gli", "le", "un", "uno", "una",
+}
 
+def _normalize_word(text: str) -> str:
+    if not text:
+        return ""
+    t = text.strip().lower()
+    t = re.sub(r'^[¿¡\s.,;:!?"\'\(\)\[\]\{\}*`~]+|[¿¡\s.,;:!?"\'\(\)\[\]\{\}*`~]+$', '', t)
+    return t
+
+def _strip_leading_article(text: str) -> str:
+    norm = _normalize_word(text)
+    words = norm.split()
+    if len(words) > 1 and words[0] in COMMON_ARTICLES:
+        return " ".join(words[1:])
+    return norm
+
+def find_existing_cards_in_deck(user_id: int, category: str, query: str) -> list:
+    """
+    Check if a word, phrase, or topic already exists on either side (Question or Answer)
+    of a flashcard in the specified deck. Returns a deduplicated list of matching standard cards.
+    """
+    cards = get_user_cards(user_id, category=category)
+    if not cards or not query or not query.strip():
+        return []
+
+    # Filter out reverse cards so each dual card pair is only inspected once
+    standard_cards = [c for c in cards if c.get("direction") != "reverse"]
+    if not standard_cards:
+        standard_cards = cards
+
+    q_norm = _normalize_word(query)
+    q_no_art = _strip_leading_article(query)
+    if not q_norm:
+        return []
+
+    exact_matches = []
+    close_matches = []
+
+    for card in standard_cards:
+        card_q_norm = _normalize_word(card.get("question", ""))
+        card_a_norm = _normalize_word(card.get("answer", ""))
+        card_q_no_art = _strip_leading_article(card.get("question", ""))
+        card_a_no_art = _strip_leading_article(card.get("answer", ""))
+
+        # 1. Exact match (with or without article) on Question or Answer
+        if (
+            q_norm == card_q_norm
+            or q_norm == card_a_norm
+            or q_no_art == card_q_no_art
+            or q_no_art == card_a_no_art
+        ):
+            exact_matches.append(card)
+            continue
+
+        # 2. Check comma/slash/semicolon/parentheses separated phrases in Question or Answer
+        # e.g. answer = "dog, hound" or question = "perro / can"
+        q_segments = [_strip_leading_article(p) for p in re.split(r'[,;/|()]', card.get("question", "")) if p.strip()]
+        a_segments = [_strip_leading_article(p) for p in re.split(r'[,;/|()]', card.get("answer", "")) if p.strip()]
+        if q_no_art in q_segments or q_no_art in a_segments or q_norm in q_segments or q_norm in a_segments:
+            exact_matches.append(card)
+            continue
+
+        # 3. Whole-word boundary match (if query is at least 2 chars and not just an article)
+        if len(q_no_art) >= 2 and q_no_art not in COMMON_ARTICLES:
+            pattern = r'(?u)\b' + re.escape(q_no_art) + r'\b'
+            if re.search(pattern, card_q_norm) or re.search(pattern, card_a_norm):
+                close_matches.append(card)
+                continue
+
+    # Deduplicate by card id and question/answer content
+    seen_ids = set()
+    seen_pairs = set()
+    unique_results = []
+    for c in exact_matches + close_matches:
+        c_id = c.get("id")
+        pair_key = (_normalize_word(c.get("question", "")), _normalize_word(c.get("answer", "")))
+        if c_id not in seen_ids and pair_key not in seen_pairs:
+            seen_ids.add(c_id)
+            seen_pairs.add(pair_key)
+            unique_results.append(c)
+
+    return unique_results
 
 def search_user_cards(user_id: int, query: str, category: str = None):
     cards = get_user_cards(user_id, category if category != "all" else None)

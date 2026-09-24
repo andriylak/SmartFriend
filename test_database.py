@@ -210,6 +210,49 @@ class TestDatabase(unittest.TestCase):
         self.assertEqual(len(fuzzy), 1)
         self.assertEqual(fuzzy[0]["question"], "el perro")
 
+    def test_find_existing_cards_in_deck(self):
+        user_id = 66667
+        # Create dual SRS cards in Spanish
+        database.add_card(user_id, "el perro", "the dog", "Spanish", create_pair=True)
+        database.add_card(user_id, "to run", "бігати", "Spanish", create_pair=True)
+        database.add_card(user_id, "gato", "cat, feline", "Spanish", create_pair=True)
+        # Create card in another deck
+        database.add_card(user_id, "la maison", "the house", "French", create_pair=True)
+
+        # 1. Exact match with article stripped (query "perro" matches "el perro")
+        res1 = database.find_existing_cards_in_deck(user_id, "Spanish", "perro")
+        self.assertEqual(len(res1), 1)
+        self.assertEqual(res1[0]["question"], "el perro")
+
+        # 2. Reverse pair deduplication: only 1 card returned despite dual SRS cards
+        self.assertEqual(len(res1), 1)
+
+        # 3. Match from answer side (query "dog" matches answer "the dog")
+        res2 = database.find_existing_cards_in_deck(user_id, "Spanish", "dog")
+        self.assertEqual(len(res2), 1)
+        self.assertEqual(res2[0]["question"], "el perro")
+
+        # 4. Particle stripping ("run" matches "to run")
+        res3 = database.find_existing_cards_in_deck(user_id, "Spanish", "run")
+        self.assertEqual(len(res3), 1)
+        self.assertEqual(res3[0]["question"], "to run")
+
+        # 5. Segment matching ("feline" matches "cat, feline")
+        res4 = database.find_existing_cards_in_deck(user_id, "Spanish", "feline")
+        self.assertEqual(len(res4), 1)
+        self.assertEqual(res4[0]["question"], "gato")
+
+        # 6. Avoiding false positives ("catch" must NOT match "cat", "in" must NOT match "dinner")
+        res_no_match = database.find_existing_cards_in_deck(user_id, "Spanish", "catch")
+        self.assertEqual(len(res_no_match), 0)
+
+        # 7. Deck isolation (French card "la maison" should not match in Spanish)
+        res_diff_deck = database.find_existing_cards_in_deck(user_id, "Spanish", "maison")
+        self.assertEqual(len(res_diff_deck), 0)
+        res_french = database.find_existing_cards_in_deck(user_id, "French", "maison")
+        self.assertEqual(len(res_french), 1)
+
+
     def test_srs_scheduling(self):
         user_id = 77777
         card_id = database.add_card(user_id, "Hola", "Hello", "Spanish", create_pair=False)

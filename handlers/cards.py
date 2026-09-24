@@ -23,6 +23,7 @@ from keyboards import (
     get_ai_preview_keyboard,
     get_category_selection_reply_keyboard,
     get_ai_topic_keyboard,
+    get_duplicate_warning_keyboard,
     get_list_categories_keyboard,
     get_pagination_keyboard,
     get_deck_delete_confirm_keyboard
@@ -51,12 +52,11 @@ class CreateCardStates(StatesGroup):
     waiting_for_target_language = State()
     waiting_for_ai_custom_prompt = State()
     waiting_for_ai_topic = State()
+    waiting_for_duplicate_confirm = State()
     waiting_for_ai_preview = State()
     waiting_for_edit_question = State()
     waiting_for_edit_answer = State()
     waiting_for_edit_comment = State()
-    waiting_for_edit_question = State()
-    waiting_for_edit_answer = State()
 
 class ListCardsStates(StatesGroup):
     browsing_deck = State()
@@ -460,6 +460,40 @@ async def process_ai_topic(message: Message, state: FSMContext):
         await message.answer("Please enter a valid topic.")
         return
         
+    user_id = message.from_user.id
+    data = await state.get_data()
+    category = data.get("category", "General")
+
+    # Pre-check: Check if word/phrase already exists in this deck before running AI call
+    existing_cards = database.find_existing_cards_in_deck(user_id, category, topic)
+    if existing_cards:
+        await state.update_data(topic=topic)
+        await state.set_state(CreateCardStates.waiting_for_duplicate_confirm)
+
+        count = len(existing_cards)
+        cards_str = ""
+        for idx, card in enumerate(existing_cards[:3], 1):
+            q_text = escape(card.get('question', ''))
+            a_text = escape(card.get('answer', ''))
+            c_text = escape(card.get('comment', ''))
+            comment_part = f"\n   📌 <i>{c_text}</i>" if c_text else ""
+            cards_str += f"{idx}. <b>Q:</b> {q_text}\n   <b>A:</b> {a_text}{comment_part}\n"
+
+        more_note = f"\n<i>...and {count - 3} more card(s)</i>\n" if count > 3 else ""
+
+        warning_text = (
+            f"⚠️ <b>This word may already exist in deck '{escape(category)}'!</b>\n\n"
+            f"Found {count} existing card{'s' if count > 1 else ''} matching <b>\"{escape(topic)}\"</b>:\n\n"
+            f"{cards_str}{more_note}\n"
+            "✨ <b>Would you like to run the AI generation anyway, or cancel and enter another word?</b>"
+        )
+        await message.answer(
+            warning_text,
+            reply_markup=get_duplicate_warning_keyboard(),
+            parse_mode="HTML"
+        )
+        return
+
     await state.update_data(topic=topic)
     await generate_and_show_ai_preview(message, state)
 
@@ -534,6 +568,45 @@ async def generate_and_show_ai_preview(message: Message, state: FSMContext):
             reply_markup=get_cancel_keyboard(),
             parse_mode="Markdown"
         )
+
+# --- DUPLICATE CONFIRMATION HANDLERS ---
+@router.callback_query(CreateCardStates.waiting_for_duplicate_confirm, F.data == "ai_dup_continue")
+async def process_dup_continue(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
+    await generate_and_show_ai_preview(callback.message, state)
+
+@router.callback_query(CreateCardStates.waiting_for_duplicate_confirm, F.data == "ai_dup_cancel")
+async def process_dup_cancel(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
+    data = await state.get_data()
+    category = data.get("category", "General")
+    user_id = callback.from_user.id
+    deck_setting = database.get_deck_setting(user_id, category)
+    has_saved_prompt = deck_setting is not None or data.get("has_saved_prompt", False)
+
+    await state.set_state(CreateCardStates.waiting_for_ai_topic)
+    await state.update_data(topic=None)
+
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
+
+    await callback.message.answer(
+        f"🤖 <b>AI Generation Cancelled</b> (Deck: <b>{escape(category)}</b>)\n\n"
+        "What word, phrase, or topic do you want the AI to create next?\n\n"
+        "<i>(Or tap <b>✍️ Manual Card</b> / <b>❌ Cancel</b> below)</i>",
+        reply_markup=get_ai_topic_keyboard(has_saved_prompt=has_saved_prompt),
+        parse_mode="HTML"
+    )
+
+@router.message(CreateCardStates.waiting_for_duplicate_confirm)
+async def process_dup_override(message: Message, state: FSMContext):
+    await process_ai_topic(message, state)
 
 # --- AI PREVIEW CALLBACK HANDLERS ---
 @router.callback_query(CreateCardStates.waiting_for_ai_preview, F.data == "ai_save")

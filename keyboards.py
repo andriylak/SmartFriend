@@ -261,6 +261,16 @@ def get_deck_delete_confirm_keyboard(category: str):
     builder.adjust(1)
     return builder.as_markup()
 
+def get_duplicate_warning_keyboard():
+    builder = InlineKeyboardBuilder()
+    builder.add(
+        InlineKeyboardButton(text="▶️ Generate Anyway", callback_data="ai_dup_continue"),
+        InlineKeyboardButton(text="❌ Cancel / Another Word", callback_data="ai_dup_cancel")
+    )
+    builder.adjust(1)
+    return builder.as_markup()
+
+
 
 
 
