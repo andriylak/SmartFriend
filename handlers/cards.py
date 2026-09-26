@@ -26,7 +26,10 @@ from keyboards import (
     get_duplicate_warning_keyboard,
     get_list_categories_keyboard,
     get_pagination_keyboard,
-    get_deck_delete_confirm_keyboard
+    get_deck_delete_confirm_keyboard,
+    get_share_type_keyboard,
+    get_share_link_keyboard,
+    get_deck_leave_confirm_keyboard
 )
 
 logger = logging.getLogger(__name__)
@@ -800,14 +803,21 @@ async def process_edited_comment(message: Message, state: FSMContext):
 
 CARDS_PER_PAGE = 5
 
-def format_card_page_text(cards: list, category_name: str, page: int, total_pages: int) -> str:
+def format_card_page_text(cards: list, category_name: str, page: int, total_pages: int, user_id: int = None) -> str:
     start_idx = (page - 1) * CARDS_PER_PAGE
     end_idx = start_idx + CARDS_PER_PAGE
     page_cards = cards[start_idx:end_idx]
     
+    collab_badge = ""
+    if user_id and category_name != "all":
+        collab_deck = database.get_collaborative_deck_for_user(user_id, category_name)
+        if collab_deck:
+            members = database.get_collaborative_deck_members(collab_deck["id"])
+            collab_badge = f" [🤝 Shared with {len(members)} member(s)]"
+
     if category_name != "all":
         cat_escaped = escape(category_name)
-        text = f"📚 <b>Deck: {cat_escaped}</b> ({len(cards)} cards - Page {page}/{total_pages})\n"
+        text = f"📚 <b>Deck: {cat_escaped}</b>{collab_badge} ({len(cards)} cards - Page {page}/{total_pages})\n"
     else:
         text = f"📚 <b>All Learning Cards</b> ({len(cards)} cards - Page {page}/{total_pages})\n"
         
@@ -872,7 +882,7 @@ async def process_list_category_selection(callback: CallbackQuery, state: FSMCon
     total_pages = math.ceil(len(cards) / CARDS_PER_PAGE)
     current_page = 1
     
-    page_text = format_card_page_text(cards, cat_key, current_page, total_pages)
+    page_text = format_card_page_text(cards, cat_key, current_page, total_pages, user_id=user_id)
     kb = get_pagination_keyboard(cat_key, current_page, total_pages)
     
     try:
@@ -907,7 +917,7 @@ async def process_list_page(callback: CallbackQuery, state: FSMContext):
     elif page > total_pages:
         page = total_pages
         
-    page_text = format_card_page_text(cards, cat_key, page, total_pages)
+    page_text = format_card_page_text(cards, cat_key, page, total_pages, user_id=user_id)
     kb = get_pagination_keyboard(cat_key, page, total_pages)
     
     try:
@@ -1040,4 +1050,126 @@ async def process_confirm_delete_deck(callback: CallbackQuery, state: FSMContext
         
     await callback.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
     await callback.answer(f"Deck '{category}' deleted.")
+
+# --- DECK SHARING HANDLERS ---
+
+@router.callback_query(F.data.startswith("share_deck_"))
+async def process_share_deck_menu(callback: CallbackQuery):
+    category = callback.data.split("share_deck_")[1]
+    collab_deck = database.get_collaborative_deck_for_user(callback.from_user.id, category)
+
+    collab_notice = ""
+    if collab_deck:
+        members = database.get_collaborative_deck_members(collab_deck["id"])
+        collab_notice = f"\n🤝 <i>(Already Collaborative - {len(members)} member(s))</i>\n"
+
+    text = (
+        f"🔗 <b>Share Deck: '{escape(category)}'</b>\n"
+        f"{collab_notice}\n"
+        "Choose how you want to share this deck with a friend:\n\n"
+        "📋 <b>Send a Copy (Snapshot)</b>\n"
+        "Your friend gets an independent copy of all current cards. Any future changes by either of you won't affect the other.\n\n"
+        "🤝 <b>Collaborative Shared Deck</b>\n"
+        "Study and grow this deck together! Both of you can add words. Deleting a word hides it for you, and it's only removed if both of you delete it."
+    )
+    kb = get_share_type_keyboard(category)
+    await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    await callback.answer()
+
+@router.callback_query(F.data.startswith("share_mode_copy_"))
+async def process_share_mode_copy(callback: CallbackQuery):
+    category = callback.data.split("share_mode_copy_")[1]
+    user_id = callback.from_user.id
+
+    token = database.create_deck_share(user_id, category, share_type="copy")
+
+    bot_username = "LearningBot"
+    try:
+        me = await callback.bot.get_me()
+        if me.username:
+            bot_username = me.username
+    except Exception:
+        pass
+
+    share_url = f"https://t.me/{bot_username}?start=copy_{token}"
+    share_text = f"Here is a copy of my flashcard deck '{category}'! Tap the link to import it to your bot:"
+
+    message_text = (
+        f"📋 <b>Share Link Ready (Snapshot Copy)</b>\n\n"
+        f"<b>Deck:</b> {escape(category)}\n\n"
+        f"<b>Link:</b> (tap to copy)\n<code>{share_url}</code>\n\n"
+        "Send this link to a friend. When they open it, they can import a copy of this deck into their collection!"
+    )
+    kb = get_share_link_keyboard(share_url, share_text, category)
+    await callback.message.edit_text(message_text, reply_markup=kb, parse_mode="HTML")
+    await callback.answer()
+
+@router.callback_query(F.data.startswith("share_mode_collab_"))
+async def process_share_mode_collab(callback: CallbackQuery):
+    category = callback.data.split("share_mode_collab_")[1]
+    user_id = callback.from_user.id
+
+    token = database.create_deck_share(user_id, category, share_type="collab")
+
+    bot_username = "LearningBot"
+    try:
+        me = await callback.bot.get_me()
+        if me.username:
+            bot_username = me.username
+    except Exception:
+        pass
+
+    share_url = f"https://t.me/{bot_username}?start=collab_{token}"
+    share_text = f"Join my collaborative flashcard deck '{category}'! Tap the link to study and add words together:"
+
+    message_text = (
+        f"🤝 <b>Collaborative Invite Link Ready</b>\n\n"
+        f"<b>Deck:</b> {escape(category)}\n\n"
+        f"<b>Invite Link:</b> (tap to copy)\n<code>{share_url}</code>\n\n"
+        "Send this link to your friend! Once they join:\n"
+        "• Both of you can add words to this deck\n"
+        "• You each have independent study schedules\n"
+        "• A word deleted by you remains for them until both delete it."
+    )
+    kb = get_share_link_keyboard(share_url, share_text, category)
+    await callback.message.edit_text(message_text, reply_markup=kb, parse_mode="HTML")
+    await callback.answer()
+
+@router.callback_query(F.data.startswith("ask_leave_deck_"))
+async def process_ask_leave_deck(callback: CallbackQuery):
+    category = callback.data.split("ask_leave_deck_")[1]
+    text = (
+        f"⚠️ <b>Leave Collaborative Deck '{escape(category)}'?</b>\n\n"
+        "You will no longer have access to this shared deck and your study progress for it will be removed.\n"
+        "The deck will still remain for the other members."
+    )
+    kb = get_deck_leave_confirm_keyboard(category)
+    await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    await callback.answer()
+
+@router.callback_query(F.data.startswith("confirm_leave_deck_"))
+async def process_confirm_leave_deck(callback: CallbackQuery, state: FSMContext):
+    category = callback.data.split("confirm_leave_deck_")[1]
+    user_id = callback.from_user.id
+    collab_deck = database.get_collaborative_deck_for_user(user_id, category)
+    if collab_deck:
+        database.leave_collaborative_deck(user_id, collab_deck["id"])
+
+    await state.clear()
+    categories = database.get_user_categories(user_id)
+    if categories:
+        text = (
+            f"🚪 You have left the collaborative deck <b>'{escape(category)}'</b>.\n\n"
+            "Please select a deck to view your flashcards:"
+        )
+        kb = get_list_categories_keyboard(categories)
+    else:
+        text = (
+            f"🚪 You have left the collaborative deck <b>'{escape(category)}'</b>.\n\n"
+            "📭 You don't have any remaining flashcard decks."
+        )
+        kb = None
+
+    await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    await callback.answer("Left deck.")
 

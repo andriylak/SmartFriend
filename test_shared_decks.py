@@ -1,8 +1,15 @@
 import os
 import unittest
 import sqlite3
+import asyncio
+from unittest.mock import AsyncMock, MagicMock
+
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.storage.memory import MemoryStorage, StorageKey
+from aiogram.types import Message, CallbackQuery, User
 
 import database
+from handlers.common import cmd_start, process_confirm_join_collab, process_confirm_import_copy
 
 TEST_DB_PATH = "test_shared_decks.db"
 
@@ -186,6 +193,92 @@ class TestSharedDecks(unittest.TestCase):
         # User A still has German with the card
         self.assertIn("German", database.get_user_categories(user_a))
         self.assertEqual(len(database.get_user_cards(user_a, "German")), 1)
+
+    def test_cmd_start_deep_link_handling(self):
+        user_a = 7001
+        user_b = 7002
+        database.add_card(user_a, "Q1", "A1", "Physics", create_pair=False)
+        collab_token = database.create_deck_share(user_a, "Physics", share_type="collab")
+        copy_token = database.create_deck_share(user_a, "Physics", share_type="copy")
+
+        storage = MemoryStorage()
+        state = FSMContext(storage=storage, key=StorageKey(bot_id=1, chat_id=123, user_id=user_b))
+
+        # 1. Test collab invite
+        msg_collab = AsyncMock(spec=Message)
+        msg_collab.answer = AsyncMock()
+        cmd_collab = MagicMock()
+        cmd_collab.args = f"collab_{collab_token}"
+
+        asyncio.run(cmd_start(msg_collab, cmd_collab, state))
+        msg_collab.answer.assert_called_once()
+        call_args = msg_collab.answer.call_args
+        self.assertIn("Collaborative Deck Invitation", call_args[0][0])
+        self.assertIn("Physics", call_args[0][0])
+
+        # 2. Test copy invite
+        msg_copy = AsyncMock(spec=Message)
+        msg_copy.answer = AsyncMock()
+        cmd_copy = MagicMock()
+        cmd_copy.args = f"copy_{copy_token}"
+
+        asyncio.run(cmd_start(msg_copy, cmd_copy, state))
+        msg_copy.answer.assert_called_once()
+        call_args = msg_copy.answer.call_args
+        self.assertIn("Shared Deck Copy", call_args[0][0])
+        self.assertIn("Physics", call_args[0][0])
+
+        # 3. Test invalid token
+        msg_invalid = AsyncMock(spec=Message)
+        msg_invalid.answer = AsyncMock()
+        cmd_invalid = MagicMock()
+        cmd_invalid.args = "collab_nonexistent_token"
+
+        asyncio.run(cmd_start(msg_invalid, cmd_invalid, state))
+        msg_invalid.answer.assert_called_once()
+        self.assertIn("Invalid or Expired", msg_invalid.answer.call_args[0][0])
+
+    def test_callback_confirm_join_collab(self):
+        user_a = 8001
+        user_b = 8002
+        database.add_card(user_a, "Q_Bio", "A_Bio", "Biology", create_pair=False)
+        token = database.create_deck_share(user_a, "Biology", share_type="collab")
+
+        cb = AsyncMock(spec=CallbackQuery)
+        cb.data = f"confirm_join_{token}"
+        cb.from_user = User(id=user_b, is_bot=False, first_name="Collaborator", username="collab_user")
+        cb.message = AsyncMock(spec=Message)
+        cb.message.edit_text = AsyncMock()
+        cb.bot = AsyncMock()
+        cb.bot.send_message = AsyncMock()
+        cb.answer = AsyncMock()
+
+        asyncio.run(process_confirm_join_collab(cb))
+        cb.message.edit_text.assert_called_once()
+        self.assertIn("Joined Collaborative Deck", cb.message.edit_text.call_args[0][0])
+        # Verify owner received notification
+        cb.bot.send_message.assert_called_once()
+        self.assertEqual(cb.bot.send_message.call_args[1]["chat_id"], user_a)
+
+    def test_callback_confirm_import_copy(self):
+        user_a = 9001
+        user_b = 9002
+        database.add_card(user_a, "Q_Chem", "A_Chem", "Chemistry", create_pair=False)
+        token = database.create_deck_share(user_a, "Chemistry", share_type="copy")
+
+        cb = AsyncMock(spec=CallbackQuery)
+        cb.data = f"confirm_import_{token}"
+        cb.from_user = User(id=user_b, is_bot=False, first_name="Importer", username="import_user")
+        cb.message = AsyncMock(spec=Message)
+        cb.message.edit_text = AsyncMock()
+        cb.answer = AsyncMock()
+
+        asyncio.run(process_confirm_import_copy(cb))
+        cb.message.edit_text.assert_called_once()
+        self.assertIn("Deck Imported Successfully", cb.message.edit_text.call_args[0][0])
+        # Verify user B has cards
+        b_cards = database.get_user_cards(user_b, "Chemistry")
+        self.assertEqual(len(b_cards), 1)
 
 if __name__ == "__main__":
     unittest.main()

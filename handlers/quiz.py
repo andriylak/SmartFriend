@@ -87,17 +87,27 @@ async def process_cfg_deck(callback: CallbackQuery, state: FSMContext):
     setting = database.get_deck_setting(user_id, category)
     studied_today = database.get_new_cards_studied_today(user_id, category)
     
-    limit = setting.get("daily_new_limit", 20)
+    limit = setting.get("daily_new_limit", 20) if setting else 20
     limit_str = "Unlimited" if limit <= 0 else f"{limit} cards/day"
-    preset = setting.get("preset_key", "general")
+    preset = setting.get("preset_key", "general") if setting else "general"
+
+    collab_deck = database.get_collaborative_deck_for_user(user_id, category)
+    is_collab = collab_deck is not None
+    is_owner = (collab_deck["owner_id"] == user_id) if is_collab else True
+
+    collab_info = ""
+    if is_collab:
+        members = database.get_collaborative_deck_members(collab_deck["id"])
+        collab_info = f"• 🤝 <b>Collaborative Deck:</b> {len(members)} member(s)\n"
 
     await state.update_data(active_config_deck=category)
     await callback.message.edit_text(
         f"⚙️ <b>Deck Settings: {escape(category)}</b>\n\n"
+        f"{collab_info}"
         f"• 🆕 <b>Daily New Limit:</b> {limit_str} (studied today: {studied_today})\n"
         f"• 🤖 <b>AI Preset:</b> {escape(preset)}\n\n"
         "Choose an option below to update deck settings:",
-        reply_markup=get_deck_config_menu_keyboard(category),
+        reply_markup=get_deck_config_menu_keyboard(category, is_collab=is_collab, is_owner=is_owner),
         parse_mode="HTML"
     )
     await callback.answer()

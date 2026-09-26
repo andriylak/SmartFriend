@@ -1,3 +1,4 @@
+import urllib.parse
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
 
@@ -188,14 +189,18 @@ def get_deck_config_list_keyboard(categories: list):
     builder.adjust(1)
     return builder.as_markup()
 
-def get_deck_config_menu_keyboard(category: str):
+def get_deck_config_menu_keyboard(category: str, is_collab: bool = False, is_owner: bool = True):
     builder = InlineKeyboardBuilder()
     builder.add(
         InlineKeyboardButton(text="🔢 Change Daily New Limit", callback_data=f"cfg_limit_{category}"),
         InlineKeyboardButton(text="🤖 Change AI Generator Preset", callback_data=f"cfg_preset_{category}"),
-        InlineKeyboardButton(text="🗑️ Delete Deck", callback_data=f"ask_del_deck_{category}"),
-        InlineKeyboardButton(text="🔙 Back to Deck List", callback_data="quiz_cfg_list")
+        InlineKeyboardButton(text="🔗 Share Deck", callback_data=f"share_deck_{category}")
     )
+    if is_collab and not is_owner:
+        builder.add(InlineKeyboardButton(text="🚪 Leave Collaborative Deck", callback_data=f"ask_leave_deck_{category}"))
+    else:
+        builder.add(InlineKeyboardButton(text="🗑️ Delete Deck", callback_data=f"ask_del_deck_{category}"))
+    builder.add(InlineKeyboardButton(text="🔙 Back to Deck List", callback_data="quiz_cfg_list"))
     builder.adjust(1)
     return builder.as_markup()
 
@@ -253,12 +258,52 @@ def get_pagination_keyboard(category: str, current_page: int, total_pages: int):
     builder.row(*nav_buttons)
     if category != "all":
         builder.row(
-            InlineKeyboardButton(text="🗑️ Delete Deck", callback_data=f"ask_del_deck_{category}"),
-            InlineKeyboardButton(text="🔙 Change Deck", callback_data="list_back_decks")
+            InlineKeyboardButton(text="🔗 Share Deck", callback_data=f"share_deck_{category}"),
+            InlineKeyboardButton(text="🗑️ Delete Deck", callback_data=f"ask_del_deck_{category}")
         )
+        builder.row(InlineKeyboardButton(text="🔙 Change Deck", callback_data="list_back_decks"))
     else:
         builder.row(InlineKeyboardButton(text="🔙 Change Deck", callback_data="list_back_decks"))
     
+    return builder.as_markup()
+
+def get_share_type_keyboard(category: str):
+    builder = InlineKeyboardBuilder()
+    builder.add(
+        InlineKeyboardButton(text="📋 Send a Copy (Snapshot)", callback_data=f"share_mode_copy_{category}"),
+        InlineKeyboardButton(text="🤝 Collaborative Shared Deck", callback_data=f"share_mode_collab_{category}"),
+        InlineKeyboardButton(text="🔙 Back", callback_data=f"list_cat_{category}")
+    )
+    builder.adjust(1)
+    return builder.as_markup()
+
+def get_share_link_keyboard(share_url: str, share_text: str, category: str):
+    builder = InlineKeyboardBuilder()
+    tg_share_url = f"https://t.me/share/url?url={urllib.parse.quote(share_url)}&text={urllib.parse.quote(share_text)}"
+    builder.add(
+        InlineKeyboardButton(text="↗️ Send to Friend on Telegram", url=tg_share_url),
+        InlineKeyboardButton(text="🔙 Back to Deck", callback_data=f"list_cat_{category}")
+    )
+    builder.adjust(1)
+    return builder.as_markup()
+
+def get_share_invite_confirm_keyboard(share_token: str, share_type: str):
+    builder = InlineKeyboardBuilder()
+    if share_type == "collab":
+        builder.add(InlineKeyboardButton(text="🤝 Join Collaborative Deck", callback_data=f"confirm_join_{share_token}"))
+    else:
+        builder.add(InlineKeyboardButton(text="📥 Import Deck Copy", callback_data=f"confirm_import_{share_token}"))
+    builder.add(InlineKeyboardButton(text="❌ Decline", callback_data="decline_share_invite"))
+    builder.adjust(1)
+    return builder.as_markup()
+
+def get_deck_leave_confirm_keyboard(category: str):
+    builder = InlineKeyboardBuilder()
+    builder.add(
+        InlineKeyboardButton(text="🚪 Yes, Leave Deck", callback_data=f"confirm_leave_deck_{category}"),
+        InlineKeyboardButton(text="❌ Cancel", callback_data=f"cfg_deck_{category}")
+    )
+    builder.adjust(1)
     return builder.as_markup()
 
 def get_deck_delete_confirm_keyboard(category: str):
