@@ -21,6 +21,7 @@ from keyboards import (
     get_reveal_keyboard,
     get_evaluation_keyboard,
     get_study_ahead_keyboard,
+    get_study_delete_confirm_keyboard,
 )
 
 logger = logging.getLogger(__name__)
@@ -240,10 +241,12 @@ async def send_next_card(message: Message, user_id: int, category: str, state: F
 
         
     card = due_cards[0]
+    await render_unrevealed_card(message, card, state, edit_existing=edit_existing)
+
+async def render_unrevealed_card(message: Message, card: dict, state: FSMContext, edit_existing: bool = True):
     is_reversed = card.get("direction") == "reverse"
     stats = f"({card['correct_count']}✅ / {card['incorrect_count']}❌)"
     q_escaped = escape(card['question'])
-    a_escaped = escape(card['answer'])
     cat_escaped = escape(card['category'])
     
     if is_reversed:
@@ -287,22 +290,9 @@ async def send_next_card(message: Message, user_id: int, category: str, state: F
         new_msg = await message.answer(plain_text, reply_markup=reply_kb)
     await state.update_data(study_msg_id=new_msg.message_id)
 
-@router.callback_query(QuizStates.studying, F.data.startswith("reveal_"))
-async def reveal_answer(callback: CallbackQuery, state: FSMContext):
-    cb_data = callback.data
-    card_id = int(cb_data.split("_")[-1])
-
-    user_id = callback.from_user.id
-    
-    cards = database.get_user_cards(user_id)
-    card = next((c for c in cards if c["id"] == card_id), None)
-    
-    if not card:
-        await callback.message.edit_text("❌ This card was deleted or is no longer available.")
-        await callback.answer()
-        return
-        
-    is_reversed = card.get("direction") == "reverse" or cb_data.startswith("reveal_rev_")
+async def render_revealed_card(message: Message, card: dict, state: FSMContext, edit_existing: bool = True, is_reversed: bool = None):
+    if is_reversed is None:
+        is_reversed = card.get("direction") == "reverse"
     stats = f"({card['correct_count']}✅ / {card['incorrect_count']}❌)"
     q_escaped = escape(card['question'])
     a_escaped = escape(card['answer'])
@@ -334,36 +324,57 @@ async def reveal_answer(callback: CallbackQuery, state: FSMContext):
             "Rate your recall difficulty:"
         )
     
-    eval_kb = get_evaluation_keyboard(card_id)
-    try:
-        await callback.message.edit_text(
-            revealed_text,
-            reply_markup=eval_kb,
-            parse_mode="HTML"
-        )
-    except Exception:
-        plain_text = (
-            f"📝 Quiz Card (ID: {card['id']}) {stats}\n"
-            f"📁 Category: {card['category']}\n\n"
-            f"Question: {card['question']}\n"
-            f"Answer: {card['answer']}"
-            f"{comment_plain}\n\n"
-            "Rate your recall difficulty:"
-        )
+    eval_kb = get_evaluation_keyboard(card["id"])
+    if edit_existing:
         try:
-            await callback.message.edit_text(
-                plain_text,
-                reply_markup=eval_kb
+            await message.edit_text(
+                revealed_text,
+                reply_markup=eval_kb,
+                parse_mode="HTML"
             )
+            await state.update_data(study_msg_id=message.message_id)
+            return
         except Exception:
+            plain_text = (
+                f"📝 Quiz Card (ID: {card['id']}) {stats}\n"
+                f"📁 Category: {card['category']}\n\n"
+                f"Question: {card['question']}\n"
+                f"Answer: {card['answer']}"
+                f"{comment_plain}\n\n"
+                "Rate your recall difficulty:"
+            )
             try:
-                await callback.message.delete()
+                await message.edit_text(
+                    plain_text,
+                    reply_markup=eval_kb
+                )
+                await state.update_data(study_msg_id=message.message_id)
+                return
             except Exception:
-                pass
-            new_msg = await callback.message.answer(plain_text, reply_markup=eval_kb)
-            await state.update_data(study_msg_id=new_msg.message_id)
+                try:
+                    await message.delete()
+                except Exception:
+                    pass
+    new_msg = await message.answer(revealed_text, reply_markup=eval_kb, parse_mode="HTML")
+    await state.update_data(study_msg_id=new_msg.message_id)
 
-    await state.update_data(study_msg_id=callback.message.message_id)
+@router.callback_query(QuizStates.studying, F.data.startswith("reveal_"))
+async def reveal_answer(callback: CallbackQuery, state: FSMContext):
+    cb_data = callback.data
+    card_id = int(cb_data.split("_")[-1])
+
+    user_id = callback.from_user.id
+    
+    cards = database.get_user_cards(user_id)
+    card = next((c for c in cards if c["id"] == card_id), None)
+    
+    if not card:
+        await callback.message.edit_text("❌ This card was deleted or is no longer available.")
+        await callback.answer()
+        return
+        
+    is_reversed = card.get("direction") == "reverse" or cb_data.startswith("reveal_rev_")
+    await render_revealed_card(callback.message, card, state, edit_existing=True, is_reversed=is_reversed)
     await callback.answer()
 
 def format_interval_display(interval: float) -> str:
@@ -418,19 +429,105 @@ async def process_grading(callback: CallbackQuery, state: FSMContext):
     # Edit current message in-place to display next card
     await send_next_card(callback.message, user_id, active_category, state, edit_existing=True)
 
+def format_study_delete_confirm_text(card: dict) -> str:
+    cat_escaped = escape(card.get("category", "General"))
+    q_escaped = escape(card.get("question", ""))
+    a_escaped = escape(card.get("answer", ""))
+    card_id = card.get("id")
+
+    return (
+        f"⚠️ <b>Are you sure you want to delete this card?</b> (ID: {card_id})\n\n"
+        f"📁 <b>Deck:</b> <i>{cat_escaped}</i>\n"
+        f"❓ <b>Question:</b>\n<i>{q_escaped}</i>\n\n"
+        f"💡 <b>Answer:</b>\n<b>{a_escaped}</b>\n\n"
+        "⚠️ <i>This action cannot be undone and will delete both sides of the card.</i>"
+    )
 
 @router.callback_query(QuizStates.studying, F.data.startswith("study_delete_"))
 @router.callback_query(F.data.startswith("study_delete_"))
 async def process_study_delete(callback: CallbackQuery, state: FSMContext):
-    card_id = int(callback.data.split("study_delete_")[1])
+    raw = callback.data.split("study_delete_")[1]
+    if raw.startswith("unrev_"):
+        from_view = "unrev"
+        card_id = int(raw.split("unrev_")[1])
+    elif raw.startswith("rev_"):
+        from_view = "rev"
+        card_id = int(raw.split("rev_")[1])
+    elif "_" in raw:
+        parts = raw.split("_", 1)
+        from_view = parts[0]
+        card_id = int(parts[1])
+    else:
+        from_view = "unrev"
+        card_id = int(raw)
+
     user_id = callback.from_user.id
-    
+    cards = database.get_user_cards(user_id)
+    card = next((c for c in cards if c["id"] == card_id), None)
+
+    if not card:
+        await callback.answer("❌ Card not found or already deleted.", show_alert=True)
+        state_data = await state.get_data()
+        active_category = state_data.get("active_category")
+        await send_next_card(callback.message, user_id, active_category, state, edit_existing=True)
+        return
+
+    confirm_text = format_study_delete_confirm_text(card)
+    confirm_kb = get_study_delete_confirm_keyboard(card_id, from_view=from_view)
+    try:
+        await callback.message.edit_text(confirm_text, reply_markup=confirm_kb, parse_mode="HTML")
+    except Exception as e:
+        logger.warning(f"Failed to edit message for delete confirm: {e}")
+        await callback.message.answer(confirm_text, reply_markup=confirm_kb, parse_mode="HTML")
+    await callback.answer()
+
+@router.callback_query(QuizStates.studying, F.data.startswith("confirm_study_del_"))
+@router.callback_query(F.data.startswith("confirm_study_del_"))
+async def process_confirm_study_delete(callback: CallbackQuery, state: FSMContext):
+    card_id = int(callback.data.split("confirm_study_del_")[1])
+    user_id = callback.from_user.id
+
     database.delete_card(card_id, user_id)
     await callback.answer("🗑️ Card deleted (both sides)!", show_alert=False)
-    
+
     state_data = await state.get_data()
     active_category = state_data.get("active_category")
     await send_next_card(callback.message, user_id, active_category, state, edit_existing=True)
+
+@router.callback_query(QuizStates.studying, F.data.startswith("cancel_study_del_"))
+@router.callback_query(F.data.startswith("cancel_study_del_"))
+async def process_cancel_study_delete(callback: CallbackQuery, state: FSMContext):
+    raw = callback.data.split("cancel_study_del_")[1]
+    if raw.startswith("unrev_"):
+        from_view = "unrev"
+        card_id = int(raw.split("unrev_")[1])
+    elif raw.startswith("rev_"):
+        from_view = "rev"
+        card_id = int(raw.split("rev_")[1])
+    elif "_" in raw:
+        parts = raw.split("_", 1)
+        from_view = parts[0]
+        card_id = int(parts[1])
+    else:
+        from_view = "unrev"
+        card_id = int(raw)
+
+    user_id = callback.from_user.id
+    cards = database.get_user_cards(user_id)
+    card = next((c for c in cards if c["id"] == card_id), None)
+
+    await callback.answer("Deletion cancelled.")
+
+    if not card:
+        state_data = await state.get_data()
+        active_category = state_data.get("active_category")
+        await send_next_card(callback.message, user_id, active_category, state, edit_existing=True)
+        return
+
+    if from_view == "rev":
+        await render_revealed_card(callback.message, card, state, edit_existing=True)
+    else:
+        await render_unrevealed_card(callback.message, card, state, edit_existing=True)
 
 def format_card_edit_menu_text(card: dict, status_prefix: str = "") -> str:
     prefix = f"{status_prefix}\n\n" if status_prefix else ""

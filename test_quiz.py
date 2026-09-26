@@ -19,7 +19,10 @@ from handlers.quiz import (
     reveal_answer,
     process_study_edit,
     process_edit_field_a,
-    save_edited_a
+    save_edited_a,
+    process_study_delete,
+    process_confirm_study_delete,
+    process_cancel_study_delete,
 )
 
 class TestQuizStudyMode(unittest.TestCase):
@@ -207,6 +210,138 @@ class TestQuizStudyMode(unittest.TestCase):
             self.assertIn("edit_field_q_55", buttons)
             self.assertIn("edit_field_a_55", buttons)
             self.assertIn("study_resume", buttons)
+
+        asyncio.run(run_test())
+
+    @patch("database.delete_card")
+    @patch("database.get_user_cards")
+    def test_process_study_delete_prompts_confirmation(self, mock_get_user_cards, mock_delete_card):
+        mock_get_user_cards.return_value = [{
+            "id": 55,
+            "question": "What is 2+2?",
+            "answer": "Four",
+            "comment": "Math",
+            "category": "General"
+        }]
+
+        mock_callback = AsyncMock()
+        mock_callback.data = "study_delete_unrev_55"
+        mock_callback.from_user.id = 1000
+        mock_callback.message.edit_text = AsyncMock()
+        mock_callback.answer = AsyncMock()
+
+        async def run_test():
+            await self.state.set_state(QuizStates.studying)
+            await process_study_delete(mock_callback, self.state)
+
+            # Deletion must NOT occur on initial click
+            mock_delete_card.assert_not_called()
+
+            # Message must prompt user with confirmation text
+            mock_callback.message.edit_text.assert_called_once()
+            call_text = mock_callback.message.edit_text.call_args[0][0]
+            self.assertIn("Are you sure you want to delete this card?", call_text)
+            self.assertIn("What is 2+2?", call_text)
+            self.assertIn("Four", call_text)
+
+            # Markup must have confirm and cancel buttons
+            markup = mock_callback.message.edit_text.call_args[1].get("reply_markup")
+            buttons = [btn.callback_data for row in markup.inline_keyboard for btn in row]
+            self.assertIn("confirm_study_del_55", buttons)
+            self.assertIn("cancel_study_del_unrev_55", buttons)
+
+        asyncio.run(run_test())
+
+    @patch("handlers.quiz.send_next_card")
+    @patch("database.delete_card")
+    def test_process_confirm_study_delete(self, mock_delete_card, mock_send_next_card):
+        mock_callback = AsyncMock()
+        mock_callback.data = "confirm_study_del_55"
+        mock_callback.from_user.id = 1000
+        mock_callback.answer = AsyncMock()
+
+        async def run_test():
+            await self.state.set_state(QuizStates.studying)
+            await self.state.update_data(active_category="General")
+
+            await process_confirm_study_delete(mock_callback, self.state)
+
+            mock_delete_card.assert_called_once_with(55, 1000)
+            mock_callback.answer.assert_called_once()
+            mock_send_next_card.assert_called_once()
+
+        asyncio.run(run_test())
+
+    @patch("database.delete_card")
+    @patch("database.get_user_cards")
+    def test_process_cancel_study_delete_unrev(self, mock_get_user_cards, mock_delete_card):
+        mock_get_user_cards.return_value = [{
+            "id": 55,
+            "question": "What is 2+2?",
+            "answer": "Four",
+            "comment": "Math",
+            "category": "General",
+            "correct_count": 0,
+            "incorrect_count": 0,
+            "direction": "standard"
+        }]
+
+        mock_callback = AsyncMock()
+        mock_callback.data = "cancel_study_del_unrev_55"
+        mock_callback.from_user.id = 1000
+        mock_callback.message.edit_text = AsyncMock()
+        mock_callback.answer = AsyncMock()
+
+        async def run_test():
+            await self.state.set_state(QuizStates.studying)
+            await process_cancel_study_delete(mock_callback, self.state)
+
+            mock_delete_card.assert_not_called()
+            mock_callback.message.edit_text.assert_called_once()
+            call_text = mock_callback.message.edit_text.call_args[0][0]
+            self.assertIn("What is 2+2?", call_text)
+
+            # Restores reveal keyboard with Show Answer button
+            markup = mock_callback.message.edit_text.call_args[1].get("reply_markup")
+            buttons = [btn.callback_data for row in markup.inline_keyboard for btn in row]
+            self.assertIn("reveal_std_55", buttons)
+
+        asyncio.run(run_test())
+
+    @patch("database.delete_card")
+    @patch("database.get_user_cards")
+    def test_process_cancel_study_delete_rev(self, mock_get_user_cards, mock_delete_card):
+        mock_get_user_cards.return_value = [{
+            "id": 55,
+            "question": "What is 2+2?",
+            "answer": "Four",
+            "comment": "Math",
+            "category": "General",
+            "correct_count": 0,
+            "incorrect_count": 0,
+            "direction": "standard"
+        }]
+
+        mock_callback = AsyncMock()
+        mock_callback.data = "cancel_study_del_rev_55"
+        mock_callback.from_user.id = 1000
+        mock_callback.message.edit_text = AsyncMock()
+        mock_callback.answer = AsyncMock()
+
+        async def run_test():
+            await self.state.set_state(QuizStates.studying)
+            await process_cancel_study_delete(mock_callback, self.state)
+
+            mock_delete_card.assert_not_called()
+            mock_callback.message.edit_text.assert_called_once()
+            call_text = mock_callback.message.edit_text.call_args[0][0]
+            self.assertIn("Rate your recall difficulty", call_text)
+
+            # Restores evaluation keyboard with SRS grading buttons
+            markup = mock_callback.message.edit_text.call_args[1].get("reply_markup")
+            buttons = [btn.callback_data for row in markup.inline_keyboard for btn in row]
+            self.assertIn("srs_again_55", buttons)
+            self.assertIn("srs_good_55", buttons)
 
         asyncio.run(run_test())
 

@@ -39,7 +39,7 @@ def get_reveal_keyboard(card_id: int, is_reversed: bool = False):
     builder.add(InlineKeyboardButton(text=text, callback_data=cb))
     builder.add(
         InlineKeyboardButton(text="✏️ Edit", callback_data=f"study_edit_{card_id}"),
-        InlineKeyboardButton(text="🗑️ Delete", callback_data=f"study_delete_{card_id}")
+        InlineKeyboardButton(text="🗑️ Delete", callback_data=f"study_delete_unrev_{card_id}")
     )
     builder.add(InlineKeyboardButton(text="❌ End Session", callback_data="study_stop"))
     builder.adjust(1, 2, 1)
@@ -54,10 +54,19 @@ def get_evaluation_keyboard(card_id: int):
         InlineKeyboardButton(text="🟢 Good", callback_data=f"srs_good_{card_id}"),
         InlineKeyboardButton(text="🔵 Easy", callback_data=f"srs_easy_{card_id}"),
         InlineKeyboardButton(text="✏️ Edit", callback_data=f"study_edit_{card_id}"),
-        InlineKeyboardButton(text="🗑️ Delete", callback_data=f"study_delete_{card_id}"),
+        InlineKeyboardButton(text="🗑️ Delete", callback_data=f"study_delete_rev_{card_id}"),
         InlineKeyboardButton(text="❌ End Session", callback_data="study_stop")
     )
     builder.adjust(2, 2, 2, 1)
+    return builder.as_markup()
+
+def get_study_delete_confirm_keyboard(card_id: int, from_view: str = "unrev"):
+    builder = InlineKeyboardBuilder()
+    builder.add(
+        InlineKeyboardButton(text="⚠️ Yes, Delete Card", callback_data=f"confirm_study_del_{card_id}"),
+        InlineKeyboardButton(text="❌ Cancel", callback_data=f"cancel_study_del_{from_view}_{card_id}")
+    )
+    builder.adjust(1)
     return builder.as_markup()
 
 def get_card_edit_menu_keyboard(card_id: int):
