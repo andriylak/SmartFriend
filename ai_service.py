@@ -4,6 +4,7 @@ import re
 import os
 import logging
 import aiohttp
+import asyncio
 from typing import Dict, Optional
 
 import config
@@ -219,10 +220,12 @@ async def generate_ai_card(
     topic: str,
     custom_prompt: Optional[str] = None,
     source_language: Optional[str] = None,
-    target_language: Optional[str] = None
+    target_language: Optional[str] = None,
+    max_retries: Optional[int] = None
 ) -> Dict[str, str]:
     """
     Calls Google Gemini API to generate a flashcard question and answer.
+    Retries up to max_retries times (default 5) if the model is overloaded or encounters network/transient errors.
     Returns a dict with {"question": "...", "answer": "..."}.
     """
     api_key = config.GEMINI_API_KEY
@@ -276,28 +279,44 @@ async def generate_ai_card(
 
     headers = {"Content-Type": "application/json"}
     last_error_msg = ""
+    retries = max_retries if max_retries is not None else getattr(config, "GEMINI_MAX_RETRIES", 5)
+    retry_delay_base = 1.0
 
     async with aiohttp.ClientSession() as session:
-        for model in models_to_try:
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
-            try:
-                async with session.post(url, json=payload, headers=headers, timeout=aiohttp.ClientTimeout(total=20)) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        try:
-                            candidate_text = data["candidates"][0]["content"]["parts"][0]["text"]
-                            logger.info(f"Successfully generated AI card using model '{model}'")
-                            return parse_card_json(candidate_text)
-                        except (KeyError, IndexError) as err:
-                            logger.error(f"Invalid API response format from model '{model}': {data}")
-                            last_error_msg = f"Model '{model}' returned invalid response format"
-                    else:
-                        error_text = await resp.text()
-                        logger.warning(f"Model '{model}' request failed with status {resp.status}: {error_text[:200]}")
-                        last_error_msg = f"Model '{model}' status {resp.status}: {error_text[:200]}"
-            except Exception as e:
-                logger.warning(f"Network/API error with model '{model}': {e}")
-                last_error_msg = f"Model '{model}' error: {e}"
+        for attempt in range(1, retries + 1):
+            for model in models_to_try:
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+                try:
+                    async with session.post(url, json=payload, headers=headers, timeout=aiohttp.ClientTimeout(total=20)) as resp:
+                        if resp.status == 200:
+                            data = await resp.json()
+                            try:
+                                candidate_text = data["candidates"][0]["content"]["parts"][0]["text"]
+                                logger.info(f"Successfully generated AI card using model '{model}' (attempt {attempt}/{retries})")
+                                return parse_card_json(candidate_text)
+                            except (KeyError, IndexError) as err:
+                                logger.error(f"Invalid API response format from model '{model}': {data}")
+                                last_error_msg = f"Model '{model}' returned invalid response format"
+                        else:
+                            error_text = await resp.text()
+                            try:
+                                err_json = json.loads(error_text)
+                                if "error" in err_json and "message" in err_json["error"]:
+                                    err_detail = err_json["error"]["message"]
+                                else:
+                                    err_detail = error_text[:200]
+                            except Exception:
+                                err_detail = error_text[:200]
+                            logger.warning(f"Model '{model}' attempt {attempt}/{retries} failed with status {resp.status}: {err_detail}")
+                            last_error_msg = f"Model '{model}' ({resp.status}): {err_detail}"
+                except Exception as e:
+                    logger.warning(f"Network/API error with model '{model}' on attempt {attempt}/{retries}: {e}")
+                    last_error_msg = f"Model '{model}' error: {e}"
 
-    raise RuntimeError(f"All Gemini API models failed. Last error: {last_error_msg}")
+            if attempt < retries:
+                sleep_time = min(retry_delay_base * (1.5 ** (attempt - 1)), 5.0)
+                logger.info(f"Gemini request attempt {attempt}/{retries} failed. Retrying in {sleep_time:.1f}s...")
+                await asyncio.sleep(sleep_time)
+
+    raise RuntimeError(f"All Gemini API requests failed after {retries} attempts. Last error: {last_error_msg}")
 

@@ -13,6 +13,7 @@ FALLBACK_MODELS = [
     "gemini-flash-lite-latest",
     "gemini-flash-latest"
 ]  # Ordered fallback models to try if primary model fails
+GEMINI_MAX_RETRIES = int(os.getenv("GEMINI_MAX_RETRIES", "5"))
 
 
 if not BOT_TOKEN:
