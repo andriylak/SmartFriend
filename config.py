@@ -7,22 +7,21 @@ load_dotenv()
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 # Models tried in order of priority (index 0 = best/primary, subsequent = fallbacks from best to worst)
+# Only Gemini 3+ models from https://ai.google.dev/gemini-api/docs/models
 DEFAULT_GEMINI_MODELS = [
-    # --- Tier 1: Pro & Deep Reasoning (Best quality) ---
-    "gemini-2.5-pro",
-    "gemini-1.5-pro",
+    # --- Tier 1: Pro & Deep Reasoning (Highest Quality) ---
+    "gemini-3.1-pro-preview",
 
-    # --- Tier 2: Flash Workhorses (High performance & speed) ---
-    "gemini-2.5-flash",
+    # --- Tier 2: Flash Workhorses (High Performance & Speed) ---
+    "gemini-3.8-flash",
+    "gemini-3.7-flash",
     "gemini-3.6-flash",
-    "gemini-2.0-flash",
-    "gemini-1.5-flash",
-    "gemini-flash-latest",
+    "gemini-3.5-flash",
+    "gemini-3-flash-preview",
 
-    # --- Tier 3: Flash-Lite & Fast Fallbacks (Lightweight & high throughput) ---
+    # --- Tier 3: Flash-Lite (Lightweight & Rapid Fallback) ---
+    "gemini-3.5-flash-lite",
     "gemini-3.1-flash-lite",
-    "gemini-flash-lite-latest",
-    "gemini-1.5-flash-8b",
 ]
 
 env_models = os.getenv("GEMINI_MODELS")
