@@ -255,12 +255,15 @@ async def generate_ai_card(
             topic=topic
         )
 
-    # Build ordered list of models to try starting with primary MODEL_NAME, followed by FALLBACK_MODELS
-    fallback_list = getattr(config, "FALLBACK_MODELS", [getattr(config, "FALLBACK_MODEL_NAME", "gemini-3.1-flash-lite")])
-    models_to_try = [config.MODEL_NAME]
-    for model in fallback_list:
-        if model not in models_to_try:
-            models_to_try.append(model)
+    # Build ordered list of models to try (prioritizes config.GEMINI_MODELS)
+    if hasattr(config, "GEMINI_MODELS") and config.GEMINI_MODELS:
+        models_to_try = list(config.GEMINI_MODELS)
+    else:
+        fallback_list = getattr(config, "FALLBACK_MODELS", [getattr(config, "FALLBACK_MODEL_NAME", "gemini-3.1-flash-lite")])
+        models_to_try = [getattr(config, "MODEL_NAME", "gemini-2.5-pro")]
+        for model in fallback_list:
+            if model not in models_to_try:
+                models_to_try.append(model)
 
     payload = {
         "contents": [

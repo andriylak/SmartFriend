@@ -92,10 +92,13 @@ Hope that helps!"""
 
     def test_model_config(self):
         import config
-        self.assertTrue(hasattr(config, "MODEL_NAME"))
-        self.assertTrue(hasattr(config, "FALLBACK_MODEL_NAME"))
-        self.assertTrue(hasattr(config, "FALLBACK_MODELS"))
-        self.assertIn(config.FALLBACK_MODEL_NAME, config.FALLBACK_MODELS)
+        self.assertTrue(hasattr(config, "GEMINI_MODELS"))
+        self.assertIsInstance(config.GEMINI_MODELS, list)
+        self.assertGreater(len(config.GEMINI_MODELS), 1)
+        self.assertIn("gemini-2.5-pro", config.GEMINI_MODELS)
+        self.assertEqual(config.MODEL_NAME, config.GEMINI_MODELS[0])
+        self.assertEqual(config.FALLBACK_MODELS, config.GEMINI_MODELS[1:])
+        self.assertEqual(config.FALLBACK_MODEL_NAME, config.GEMINI_MODELS[1])
         self.assertTrue(hasattr(config, "GEMINI_MAX_RETRIES"))
         self.assertEqual(config.GEMINI_MAX_RETRIES, 5)
 
@@ -154,7 +157,7 @@ Hope that helps!"""
 
         async def run_test():
             with patch("config.GEMINI_API_KEY", "fake_key"), \
-                 patch("config.FALLBACK_MODELS", []), \
+                 patch("config.GEMINI_MODELS", ["gemini-2.5-pro"]), \
                  patch("aiohttp.ClientSession", return_value=MockSessionContext()), \
                  patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
 
@@ -192,7 +195,7 @@ Hope that helps!"""
 
         async def run_test():
             with patch("config.GEMINI_API_KEY", "fake_key"), \
-                 patch("config.FALLBACK_MODELS", []), \
+                 patch("config.GEMINI_MODELS", ["gemini-2.5-pro"]), \
                  patch("aiohttp.ClientSession", return_value=MockSessionContext()), \
                  patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
 
