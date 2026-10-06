@@ -23,6 +23,14 @@ from handlers.quiz import (
     process_study_delete,
     process_confirm_study_delete,
     process_cancel_study_delete,
+    process_cfg_deck,
+    process_cfg_preset,
+    process_cfg_select_preset,
+    process_cfg_lang_src_btn,
+    process_cfg_lang_src_msg,
+    process_cfg_lang_tgt_btn,
+    process_cfg_lang_tgt_msg,
+    process_cfg_custom_prompt_msg,
 )
 
 class TestQuizStudyMode(unittest.TestCase):
@@ -342,6 +350,212 @@ class TestQuizStudyMode(unittest.TestCase):
             buttons = [btn.callback_data for row in markup.inline_keyboard for btn in row]
             self.assertIn("srs_again_55", buttons)
             self.assertIn("srs_good_55", buttons)
+
+        asyncio.run(run_test())
+
+class TestDeckPresetManager(unittest.TestCase):
+    def setUp(self):
+        self.storage = MemoryStorage()
+        self.key = StorageKey(bot_id=1, chat_id=100, user_id=1000)
+        self.state = FSMContext(storage=self.storage, key=self.key)
+
+    @patch("database.get_collaborative_deck_for_user", return_value=None)
+    @patch("database.get_new_cards_studied_today", return_value=0)
+    @patch("database.get_deck_setting")
+    def test_deck_config_shows_language_preset_details(self, mock_get_setting, mock_studied, mock_collab):
+        mock_get_setting.return_value = {
+            "preset_key": "language",
+            "source_language": "Czech",
+            "target_language": "English",
+            "daily_new_limit": 20
+        }
+        mock_callback = AsyncMock()
+        mock_callback.data = "cfg_deck_Czech"
+        mock_callback.from_user.id = 1000
+        mock_callback.message.edit_text = AsyncMock()
+        mock_callback.answer = AsyncMock()
+
+        async def run_test():
+            await process_cfg_deck(mock_callback, self.state)
+            mock_callback.message.edit_text.assert_called_once()
+            call_text = mock_callback.message.edit_text.call_args[0][0]
+            self.assertIn("AI Preset:", call_text)
+            self.assertIn("Language Learning (Czech ➔ English)", call_text)
+
+        asyncio.run(run_test())
+
+    @patch("database.get_deck_setting")
+    def test_process_cfg_preset_opens_selection_menu(self, mock_get_setting):
+        mock_get_setting.return_value = {
+            "preset_key": "language",
+            "source_language": "Czech",
+            "target_language": "English"
+        }
+        mock_callback = AsyncMock()
+        mock_callback.data = "cfg_preset_Czech"
+        mock_callback.from_user.id = 1000
+        mock_callback.message.edit_text = AsyncMock()
+        mock_callback.answer = AsyncMock()
+
+        async def run_test():
+            await process_cfg_preset(mock_callback, self.state)
+            mock_callback.message.edit_text.assert_called_once()
+            call_text = mock_callback.message.edit_text.call_args[0][0]
+            self.assertIn("AI Generator Preset for 'Czech'", call_text)
+            self.assertIn("Language Learning", call_text)
+
+            markup = mock_callback.message.edit_text.call_args[1].get("reply_markup")
+            buttons = [btn.callback_data for row in markup.inline_keyboard for btn in row]
+            self.assertIn("cfg_sel_preset:language", buttons)
+            self.assertIn("cfg_sel_preset:definitions", buttons)
+            self.assertIn("cfg_sel_preset:custom", buttons)
+            self.assertIn("cfg_deck_Czech", buttons)
+
+        asyncio.run(run_test())
+
+    @patch("database.save_deck_setting")
+    def test_process_cfg_select_preset_direct(self, mock_save_setting):
+        mock_callback = AsyncMock()
+        mock_callback.data = "cfg_sel_preset:definitions"
+        mock_callback.from_user.id = 1000
+        mock_callback.message.edit_text = AsyncMock()
+        mock_callback.answer = AsyncMock()
+
+        async def run_test():
+            await self.state.update_data(active_config_deck="Science")
+            await process_cfg_select_preset(mock_callback, self.state)
+
+            mock_save_setting.assert_called_once_with(1000, "Science", preset_key="definitions")
+            mock_callback.message.edit_text.assert_called_once()
+            call_text = mock_callback.message.edit_text.call_args[0][0]
+            self.assertIn("AI Preset Saved!", call_text)
+            self.assertIn("Definitions", call_text)
+
+        asyncio.run(run_test())
+
+    def test_process_cfg_select_preset_language_flow(self):
+        mock_callback = AsyncMock()
+        mock_callback.data = "cfg_sel_preset:language"
+        mock_callback.from_user.id = 1000
+        mock_callback.message.edit_text = AsyncMock()
+        mock_callback.answer = AsyncMock()
+
+        async def run_test():
+            await self.state.update_data(active_config_deck="Czech")
+            await process_cfg_select_preset(mock_callback, self.state)
+
+            current_state = await self.state.get_state()
+            self.assertEqual(current_state, QuizStates.waiting_deck_source_lang.state)
+            mock_callback.message.edit_text.assert_called_once()
+            call_text = mock_callback.message.edit_text.call_args[0][0]
+            self.assertIn("Language Learning: Step 1 of 2", call_text)
+
+            markup = mock_callback.message.edit_text.call_args[1].get("reply_markup")
+            buttons = [btn.callback_data for row in markup.inline_keyboard for btn in row]
+            self.assertIn("cfg_lang_src:Czech", buttons)
+            self.assertIn("cfg_lang_src:Spanish", buttons)
+
+        asyncio.run(run_test())
+
+    @patch("database.save_deck_setting")
+    def test_language_source_and_target_callback_buttons(self, mock_save_setting):
+        mock_src_cb = AsyncMock()
+        mock_src_cb.data = "cfg_lang_src:Czech"
+        mock_src_cb.from_user.id = 1000
+        mock_src_cb.message.edit_text = AsyncMock()
+        mock_src_cb.answer = AsyncMock()
+
+        mock_tgt_cb = AsyncMock()
+        mock_tgt_cb.data = "cfg_lang_tgt:English"
+        mock_tgt_cb.from_user.id = 1000
+        mock_tgt_cb.message.edit_text = AsyncMock()
+        mock_tgt_cb.answer = AsyncMock()
+
+        async def run_test():
+            await self.state.update_data(active_config_deck="Czech")
+            await self.state.set_state(QuizStates.waiting_deck_source_lang)
+
+            # 1. Select source language via button
+            await process_cfg_lang_src_btn(mock_src_cb, self.state)
+            state_data = await self.state.get_data()
+            self.assertEqual(state_data.get("deck_source_lang"), "Czech")
+            current_state = await self.state.get_state()
+            self.assertEqual(current_state, QuizStates.waiting_deck_target_lang.state)
+
+            # 2. Select target language via button
+            await process_cfg_lang_tgt_btn(mock_tgt_cb, self.state)
+            mock_save_setting.assert_called_once_with(
+                user_id=1000,
+                category="Czech",
+                preset_key="language",
+                source_language="Czech",
+                target_language="English"
+            )
+            mock_tgt_cb.message.edit_text.assert_called_once()
+            call_text = mock_tgt_cb.message.edit_text.call_args[0][0]
+            self.assertIn("Language Preset Saved!", call_text)
+            self.assertIn("Czech", call_text)
+            self.assertIn("English", call_text)
+
+        asyncio.run(run_test())
+
+    @patch("database.save_deck_setting")
+    def test_language_source_and_target_text_messages(self, mock_save_setting):
+        mock_src_msg = AsyncMock()
+        mock_src_msg.text = "🇪🇸 Spanish"
+        mock_src_msg.from_user.id = 1000
+        mock_src_msg.answer = AsyncMock()
+
+        mock_tgt_msg = AsyncMock()
+        mock_tgt_msg.text = "Ukrainian"
+        mock_tgt_msg.from_user.id = 1000
+        mock_tgt_msg.answer = AsyncMock()
+
+        async def run_test():
+            await self.state.update_data(active_config_deck="Spanish Deck")
+            await self.state.set_state(QuizStates.waiting_deck_source_lang)
+
+            # 1. Send source language message
+            await process_cfg_lang_src_msg(mock_src_msg, self.state)
+            state_data = await self.state.get_data()
+            self.assertEqual(state_data.get("deck_source_lang"), "Spanish")
+
+            # 2. Send target language message
+            await process_cfg_lang_tgt_msg(mock_tgt_msg, self.state)
+            mock_save_setting.assert_called_once_with(
+                user_id=1000,
+                category="Spanish Deck",
+                preset_key="language",
+                source_language="Spanish",
+                target_language="Ukrainian"
+            )
+            mock_tgt_msg.answer.assert_called_once()
+            call_text = mock_tgt_msg.answer.call_args[0][0]
+            self.assertIn("Language Preset Saved!", call_text)
+
+        asyncio.run(run_test())
+
+    @patch("database.save_deck_setting")
+    def test_custom_prompt_input_flow(self, mock_save_setting):
+        mock_msg = AsyncMock()
+        mock_msg.text = "Create advanced C1 level flashcards with IPA pronunciation."
+        mock_msg.from_user.id = 1000
+        mock_msg.answer = AsyncMock()
+
+        async def run_test():
+            await self.state.update_data(active_config_deck="German")
+            await self.state.set_state(QuizStates.waiting_deck_custom_prompt)
+
+            await process_cfg_custom_prompt_msg(mock_msg, self.state)
+            mock_save_setting.assert_called_once_with(
+                user_id=1000,
+                category="German",
+                preset_key="custom",
+                custom_prompt="Create advanced C1 level flashcards with IPA pronunciation."
+            )
+            mock_msg.answer.assert_called_once()
+            call_text = mock_msg.answer.call_args[0][0]
+            self.assertIn("Custom Prompt Saved!", call_text)
 
         asyncio.run(run_test())
 

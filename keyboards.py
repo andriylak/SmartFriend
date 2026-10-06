@@ -217,6 +217,70 @@ def get_deck_config_menu_keyboard(category: str, is_collab: bool = False, is_own
     builder.adjust(1)
     return builder.as_markup()
 
+def get_deck_preset_selection_keyboard(category: str):
+    builder = InlineKeyboardBuilder()
+    builder.add(
+        InlineKeyboardButton(text="🌐 Language Learning", callback_data="cfg_sel_preset:language"),
+        InlineKeyboardButton(text="📚 Definitions & Concepts", callback_data="cfg_sel_preset:definitions"),
+        InlineKeyboardButton(text="💻 Programming & Syntax", callback_data="cfg_sel_preset:programming"),
+        InlineKeyboardButton(text="🧠 General Knowledge", callback_data="cfg_sel_preset:trivia"),
+        InlineKeyboardButton(text="📚 General Flashcard", callback_data="cfg_sel_preset:general"),
+        InlineKeyboardButton(text="✏️ Custom Prompt", callback_data="cfg_sel_preset:custom"),
+        InlineKeyboardButton(text="🔙 Back to Deck Settings", callback_data=f"cfg_deck_{category}")
+    )
+    builder.adjust(1)
+    return builder.as_markup()
+
+def get_deck_source_language_keyboard(category: str):
+    builder = InlineKeyboardBuilder()
+    languages = [
+        ("🇨🇿 Czech", "Czech"),
+        ("🇪🇸 Spanish", "Spanish"),
+        ("🇩🇪 German", "German"),
+        ("🇬🇧 English", "English"),
+        ("🇺🇦 Ukrainian", "Ukrainian"),
+        ("🇫🇷 French", "French"),
+        ("🇮🇹 Italian", "Italian"),
+        ("🇵🇱 Polish", "Polish"),
+    ]
+    for text, code in languages:
+        builder.add(InlineKeyboardButton(text=text, callback_data=f"cfg_lang_src:{code}"))
+    builder.adjust(2)
+    builder.row(InlineKeyboardButton(text="🔙 Back to Presets", callback_data=f"cfg_preset_{category}"))
+    return builder.as_markup()
+
+def get_deck_target_language_keyboard(category: str):
+    builder = InlineKeyboardBuilder()
+    languages = [
+        ("🇬🇧 English", "English"),
+        ("🇺🇦 Ukrainian", "Ukrainian"),
+        ("🇨🇿 Czech", "Czech"),
+        ("🇪🇸 Spanish", "Spanish"),
+        ("🇩🇪 German", "German"),
+        ("🇫🇷 French", "French"),
+        ("🇵🇱 Polish", "Polish"),
+        ("🇮🇹 Italian", "Italian"),
+    ]
+    for text, code in languages:
+        builder.add(InlineKeyboardButton(text=text, callback_data=f"cfg_lang_tgt:{code}"))
+    builder.adjust(2)
+    builder.row(InlineKeyboardButton(text="🔙 Back to Source Language", callback_data="cfg_sel_preset:language"))
+    return builder.as_markup()
+
+def get_deck_custom_prompt_keyboard(category: str):
+    builder = InlineKeyboardBuilder()
+    builder.add(InlineKeyboardButton(text="🔙 Cancel", callback_data=f"cfg_preset_{category}"))
+    return builder.as_markup()
+
+def get_deck_preset_saved_keyboard(category: str):
+    builder = InlineKeyboardBuilder()
+    builder.add(
+        InlineKeyboardButton(text="⚙️ Back to Deck Settings", callback_data=f"cfg_deck_{category}"),
+        InlineKeyboardButton(text="🎯 Study Deck", callback_data=f"quiz_cat_{category}")
+    )
+    builder.adjust(1)
+    return builder.as_markup()
+
 def get_category_selection_reply_keyboard(categories: list):
     builder = ReplyKeyboardBuilder()
     

@@ -1,6 +1,7 @@
 from html import escape
 import random
 import logging
+import re
 from aiogram import Router, F
 from aiogram.filters import Command
 from aiogram.types import Message, CallbackQuery, InlineKeyboardButton
@@ -18,6 +19,11 @@ from keyboards import (
     get_categories_keyboard,
     get_deck_config_list_keyboard,
     get_deck_config_menu_keyboard,
+    get_deck_preset_selection_keyboard,
+    get_deck_source_language_keyboard,
+    get_deck_target_language_keyboard,
+    get_deck_custom_prompt_keyboard,
+    get_deck_preset_saved_keyboard,
     get_card_edit_menu_keyboard,
     get_reveal_keyboard,
     get_evaluation_keyboard,
@@ -34,6 +40,9 @@ class QuizStates(StatesGroup):
     studying = State()
     configuring_deck = State()
     waiting_daily_limit = State()
+    waiting_deck_source_lang = State()
+    waiting_deck_target_lang = State()
+    waiting_deck_custom_prompt = State()
     editing_q = State()
     editing_a = State()
     editing_c = State()
@@ -93,6 +102,17 @@ async def process_cfg_deck(callback: CallbackQuery, state: FSMContext):
     raw_preset = setting.get("preset_key", "general") if setting else "general"
     preset = PRESET_NAME_MAP.get(raw_preset, raw_preset)
 
+    if setting and raw_preset == "language":
+        s_lang = setting.get("source_language") or "Spanish"
+        t_lang = setting.get("target_language") or "English"
+        preset_detail = f"{preset} ({s_lang} ➔ {t_lang})"
+    elif setting and raw_preset == "custom":
+        c_prompt = setting.get("custom_prompt") or ""
+        snippet = f": \"{c_prompt[:25]}...\"" if len(c_prompt) > 25 else (f": \"{c_prompt}\"" if c_prompt else "")
+        preset_detail = f"{preset}{snippet}"
+    else:
+        preset_detail = preset
+
     collab_deck = database.get_collaborative_deck_for_user(user_id, category)
     is_collab = collab_deck is not None
     is_owner = (collab_deck["owner_id"] == user_id) if is_collab else True
@@ -103,11 +123,12 @@ async def process_cfg_deck(callback: CallbackQuery, state: FSMContext):
         collab_info = f"• 🤝 <b>Collaborative Deck:</b> {len(members)} member(s)\n"
 
     await state.update_data(active_config_deck=category)
+    await state.set_state(QuizStates.configuring_deck)
     await callback.message.edit_text(
         f"⚙️ <b>Deck Settings: {escape(category)}</b>\n\n"
         f"{collab_info}"
         f"• 🆕 <b>Daily New Limit:</b> {limit_str} (studied today: {studied_today})\n"
-        f"• 🤖 <b>AI Preset:</b> {escape(preset)}\n\n"
+        f"• 🤖 <b>AI Preset:</b> {escape(preset_detail)}\n\n"
         "Choose an option below to update deck settings:",
         reply_markup=get_deck_config_menu_keyboard(category, is_collab=is_collab, is_owner=is_owner),
         parse_mode="HTML"
@@ -156,9 +177,241 @@ async def process_daily_limit_input(message: Message, state: FSMContext):
 @router.callback_query(F.data.startswith("cfg_preset_"))
 async def process_cfg_preset(callback: CallbackQuery, state: FSMContext):
     category = callback.data.split("cfg_preset_")[1]
-    await callback.answer(
-        f"To change AI presets for '{category}', create an AI card in '{category}' and select your preset.",
-        show_alert=True
+    user_id = callback.from_user.id
+    setting = database.get_deck_setting(user_id, category)
+    
+    raw_preset = setting.get("preset_key", "general") if setting else "general"
+    preset_name = PRESET_NAME_MAP.get(raw_preset, raw_preset)
+    if setting and raw_preset == "language":
+        s_lang = setting.get("source_language") or "Spanish"
+        t_lang = setting.get("target_language") or "English"
+        current_str = f"{preset_name} ({s_lang} ➔ {t_lang})"
+    elif setting and raw_preset == "custom":
+        c_prompt = setting.get("custom_prompt") or ""
+        snippet = f": \"{c_prompt[:25]}...\"" if len(c_prompt) > 25 else (f": \"{c_prompt}\"" if c_prompt else "")
+        current_str = f"{preset_name}{snippet}"
+    else:
+        current_str = preset_name
+        
+    await state.update_data(active_config_deck=category)
+    await state.set_state(QuizStates.configuring_deck)
+    
+    await callback.message.edit_text(
+        f"🤖 <b>AI Generator Preset for '{escape(category)}'</b>\n\n"
+        f"📌 <b>Current Preset:</b> {escape(current_str)}\n\n"
+        "Choose an AI preset below to configure card generation for this deck:\n\n"
+        "• 🌐 <b>Language Learning:</b> Vocabulary, translations, and example sentences\n"
+        "• 📚 <b>Definitions & Concepts:</b> Terminology, explanations, and concepts\n"
+        "• 💻 <b>Programming & Syntax:</b> Code snippets, explanations, syntax\n"
+        "• 🧠 <b>General Knowledge:</b> Trivia, facts, and explanations\n"
+        "• 📚 <b>General Flashcard:</b> Standard Q&A flashcards\n"
+        "• ✏️ <b>Custom Prompt:</b> Your own tailored AI instructions",
+        reply_markup=get_deck_preset_selection_keyboard(category),
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+@router.callback_query(F.data.startswith("cfg_sel_preset:"))
+async def process_cfg_select_preset(callback: CallbackQuery, state: FSMContext):
+    preset_key = callback.data.split("cfg_sel_preset:")[1]
+    state_data = await state.get_data()
+    category = state_data.get("active_config_deck")
+    if not category:
+        await callback.answer("⚠️ Session expired. Please select deck again.", show_alert=True)
+        categories = database.get_user_categories(callback.from_user.id)
+        await callback.message.edit_text(
+            "⚙️ <b>Configure Deck Settings</b>\n\n"
+            "Select a deck below to adjust its settings:",
+            reply_markup=get_deck_config_list_keyboard(categories),
+            parse_mode="HTML"
+        )
+        return
+
+    user_id = callback.from_user.id
+    
+    if preset_key == "language":
+        await state.set_state(QuizStates.waiting_deck_source_lang)
+        await callback.message.edit_text(
+            f"🌐 <b>Language Learning: Step 1 of 2</b>\n\n"
+            f"Deck: <b>{escape(category)}</b>\n\n"
+            "What language are you studying / learning <b>FROM</b>?\n"
+            "Select from the list below, or type the language in chat:",
+            reply_markup=get_deck_source_language_keyboard(category),
+            parse_mode="HTML"
+        )
+        await callback.answer()
+        return
+
+    if preset_key == "custom":
+        await state.set_state(QuizStates.waiting_deck_custom_prompt)
+        await callback.message.edit_text(
+            f"✏️ <b>Custom AI Prompt for '{escape(category)}'</b>\n\n"
+            "Please reply with your custom instructions for generating flashcards in this deck.\n\n"
+            "<i>Example:</i>\n"
+            "<code>Create a flashcard explaining Czech grammar rules with example sentences and pronunciation notes.</code>",
+            reply_markup=get_deck_custom_prompt_keyboard(category),
+            parse_mode="HTML"
+        )
+        await callback.answer()
+        return
+
+    # Direct presets: definitions, programming, trivia, general
+    database.save_deck_setting(user_id, category, preset_key=preset_key)
+    preset_title = PRESET_NAME_MAP.get(preset_key, preset_key)
+    await state.set_state(QuizStates.configuring_deck)
+    
+    await callback.message.edit_text(
+        f"✅ <b>AI Preset Saved!</b>\n\n"
+        f"Deck <b>{escape(category)}</b> is now set to:\n"
+        f"<b>{escape(preset_title)}</b>\n\n"
+        "New cards generated for this deck will use this preset.",
+        reply_markup=get_deck_preset_saved_keyboard(category),
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+@router.callback_query(F.data.startswith("cfg_lang_src:"))
+async def process_cfg_lang_src_btn(callback: CallbackQuery, state: FSMContext):
+    source_lang = callback.data.split("cfg_lang_src:")[1]
+    state_data = await state.get_data()
+    category = state_data.get("active_config_deck")
+    if not category:
+        await callback.answer("⚠️ Session expired.", show_alert=True)
+        return
+        
+    await state.update_data(deck_source_lang=source_lang)
+    await state.set_state(QuizStates.waiting_deck_target_lang)
+    
+    await callback.message.edit_text(
+        f"🌐 <b>Language Learning: Step 2 of 2</b>\n\n"
+        f"Deck: <b>{escape(category)}</b>\n"
+        f"Learning (Source): <b>{escape(source_lang)}</b>\n\n"
+        "What language do you want translations and definitions <b>TO</b>?\n"
+        "Select from the list below, or type the language in chat:",
+        reply_markup=get_deck_target_language_keyboard(category),
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+@router.message(QuizStates.waiting_deck_source_lang)
+async def process_cfg_lang_src_msg(message: Message, state: FSMContext):
+    raw_lang = message.text.strip()
+    if not raw_lang:
+        await message.answer("Please type a valid language name.")
+        return
+    clean_lang = re.sub(r"^[^\w\s]+", "", raw_lang).strip()
+    source_lang = clean_lang if clean_lang else raw_lang
+    
+    state_data = await state.get_data()
+    category = state_data.get("active_config_deck", "General")
+    
+    await state.update_data(deck_source_lang=source_lang)
+    await state.set_state(QuizStates.waiting_deck_target_lang)
+    
+    await message.answer(
+        f"🌐 <b>Language Learning: Step 2 of 2</b>\n\n"
+        f"Deck: <b>{escape(category)}</b>\n"
+        f"Learning (Source): <b>{escape(source_lang)}</b>\n\n"
+        "What language do you want translations and definitions <b>TO</b>?\n"
+        "Select from the list below, or type the language in chat:",
+        reply_markup=get_deck_target_language_keyboard(category),
+        parse_mode="HTML"
+    )
+
+@router.callback_query(F.data.startswith("cfg_lang_tgt:"))
+async def process_cfg_lang_tgt_btn(callback: CallbackQuery, state: FSMContext):
+    target_lang = callback.data.split("cfg_lang_tgt:")[1]
+    state_data = await state.get_data()
+    category = state_data.get("active_config_deck")
+    if not category:
+        await callback.answer("⚠️ Session expired.", show_alert=True)
+        return
+    source_lang = state_data.get("deck_source_lang", "Spanish")
+    user_id = callback.from_user.id
+    
+    database.save_deck_setting(
+        user_id=user_id,
+        category=category,
+        preset_key="language",
+        source_language=source_lang,
+        target_language=target_lang
+    )
+    await state.set_state(QuizStates.configuring_deck)
+    
+    await callback.message.edit_text(
+        f"✅ <b>Language Preset Saved!</b>\n\n"
+        f"Deck: <b>{escape(category)}</b>\n"
+        f"Preset: 🌐 <b>Language Learning</b>\n"
+        f"• Learning: <b>{escape(source_lang)}</b>\n"
+        f"• Translation: <b>{escape(target_lang)}</b>\n\n"
+        f"AI cards generated in this deck will now translate from {escape(source_lang)} to {escape(target_lang)}.",
+        reply_markup=get_deck_preset_saved_keyboard(category),
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+@router.message(QuizStates.waiting_deck_target_lang)
+async def process_cfg_lang_tgt_msg(message: Message, state: FSMContext):
+    raw_lang = message.text.strip()
+    if not raw_lang:
+        await message.answer("Please type a valid language name.")
+        return
+    clean_lang = re.sub(r"^[^\w\s]+", "", raw_lang).strip()
+    target_lang = clean_lang if clean_lang else raw_lang
+    
+    state_data = await state.get_data()
+    category = state_data.get("active_config_deck", "General")
+    source_lang = state_data.get("deck_source_lang", "Spanish")
+    user_id = message.from_user.id
+    
+    database.save_deck_setting(
+        user_id=user_id,
+        category=category,
+        preset_key="language",
+        source_language=source_lang,
+        target_language=target_lang
+    )
+    await state.set_state(QuizStates.configuring_deck)
+    
+    await message.answer(
+        f"✅ <b>Language Preset Saved!</b>\n\n"
+        f"Deck: <b>{escape(category)}</b>\n"
+        f"Preset: 🌐 <b>Language Learning</b>\n"
+        f"• Learning: <b>{escape(source_lang)}</b>\n"
+        f"• Translation: <b>{escape(target_lang)}</b>\n\n"
+        f"AI cards generated in this deck will now translate from {escape(source_lang)} to {escape(target_lang)}.",
+        reply_markup=get_deck_preset_saved_keyboard(category),
+        parse_mode="HTML"
+    )
+
+@router.message(QuizStates.waiting_deck_custom_prompt)
+async def process_cfg_custom_prompt_msg(message: Message, state: FSMContext):
+    custom_prompt = message.text.strip()
+    if not custom_prompt:
+        await message.answer("Please enter your custom instructions.")
+        return
+        
+    state_data = await state.get_data()
+    category = state_data.get("active_config_deck", "General")
+    user_id = message.from_user.id
+    
+    database.save_deck_setting(
+        user_id=user_id,
+        category=category,
+        preset_key="custom",
+        custom_prompt=custom_prompt
+    )
+    await state.set_state(QuizStates.configuring_deck)
+    
+    snippet = escape(custom_prompt[:150] + "..." if len(custom_prompt) > 150 else custom_prompt)
+    await message.answer(
+        f"✅ <b>Custom Prompt Saved!</b>\n\n"
+        f"Deck: <b>{escape(category)}</b>\n"
+        f"Preset: ✏️ <b>Custom Prompt</b>\n\n"
+        f"Instructions:\n<code>{snippet}</code>\n\n"
+        "AI cards generated in this deck will now use these instructions.",
+        reply_markup=get_deck_preset_saved_keyboard(category),
+        parse_mode="HTML"
     )
 
 @router.callback_query(QuizStates.selecting_category, F.data.startswith("quiz_cat_"))
