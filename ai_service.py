@@ -122,6 +122,18 @@ PRESET_PROMPTS = {
             "'comment': A fascinating context detail or history background."
         )
     },
+    "general": {
+        "title": "📚 General Flashcard",
+        "system_instruction": (
+            "You are an educational assistant specializing in high-quality study flashcards.\n"
+            "Topic / Prompt: {topic}\n"
+            "Format requirements:\n"
+            "Return ONLY a JSON object with keys 'question', 'answer', and optional 'comment'.\n"
+            "'question': Front side of the flashcard (clear question, term, or concept to test).\n"
+            "'answer': Back side of the flashcard (concise and accurate definition, solution, or explanation).\n"
+            "'comment': Additional context, usage note, or mnemonic if applicable."
+        )
+    },
     "custom": {
         "title": "✏️ Custom Prompt",
         "system_instruction": (
@@ -138,13 +150,18 @@ PRESET_PROMPTS = {
 
 def get_full_prompt_text(preset_key: str, source_language: Optional[str] = None, target_language: Optional[str] = None, custom_prompt: Optional[str] = None) -> str:
     """Returns the full AI system instruction prompt template string."""
-    preset_info = PRESET_PROMPTS.get(preset_key, PRESET_PROMPTS["custom"])
+    preset_info = PRESET_PROMPTS.get(preset_key)
+    if not preset_info:
+        preset_info = PRESET_PROMPTS["general"]
+        preset_key = "general"
+        
     source_lang = source_language or "Spanish"
     target_lang = target_language or "English"
+    effective_custom_prompt = (custom_prompt or "").strip() or "Create a high-quality, clear flashcard for learning and testing this topic."
     
-    if preset_key == "custom" and custom_prompt:
+    if preset_key == "custom":
         return preset_info["system_instruction"].format(
-            custom_prompt=custom_prompt,
+            custom_prompt=effective_custom_prompt,
             topic="[Your Word/Topic]"
         )
     elif preset_key == "language":
@@ -235,13 +252,18 @@ async def generate_ai_card(
             "Please add `GEMINI_API_KEY=your_key_here` to your .env file to enable AI assistance."
         )
 
-    preset_info = PRESET_PROMPTS.get(preset_key, PRESET_PROMPTS["custom"])
+    preset_info = PRESET_PROMPTS.get(preset_key)
+    if not preset_info:
+        preset_info = PRESET_PROMPTS["general"]
+        preset_key = "general"
+        
     source_lang = source_language or "Spanish"
     target_lang = target_language or "English"
+    effective_custom_prompt = (custom_prompt or "").strip() or "Create a high-quality, clear flashcard for learning and testing this topic."
     
-    if preset_key == "custom" and custom_prompt:
+    if preset_key == "custom":
         instruction = preset_info["system_instruction"].format(
-            custom_prompt=custom_prompt,
+            custom_prompt=effective_custom_prompt,
             topic=topic
         )
     elif preset_key == "language":

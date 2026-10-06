@@ -194,6 +194,19 @@ class TestDatabase(unittest.TestCase):
         self.assertEqual(updated["source_language"], "German")
         self.assertEqual(updated["target_language"], "Ukrainian")
 
+        # Updating daily limit preserves existing language and preset settings
+        database.save_deck_setting(user_id, category, daily_new_limit=50)
+        with_limit = database.get_deck_setting(user_id, category)
+        self.assertEqual(with_limit["preset_key"], "language")
+        self.assertEqual(with_limit["source_language"], "German")
+        self.assertEqual(with_limit["target_language"], "Ukrainian")
+        self.assertEqual(with_limit["daily_new_limit"], 50)
+
+        # Case-insensitive category lookup works
+        case_match = database.get_deck_setting(user_id, "spanish")
+        self.assertIsNotNone(case_match)
+        self.assertEqual(case_match["source_language"], "German")
+
     def test_search_user_cards(self):
         user_id = 66666
         database.add_card(user_id, "el gato", "the cat", "Spanish", create_pair=False)

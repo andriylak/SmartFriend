@@ -15,6 +15,7 @@ from ai_service import format_comment
 from keyboards import (
     get_main_keyboard,
     get_cancel_keyboard,
+    get_cancel_or_back_keyboard,
     get_skip_keyboard,
     get_card_creation_mode_keyboard,
     get_ai_prompt_presets_keyboard,
@@ -41,6 +42,7 @@ PRESET_NAME_MAP = {
     "definitions": "📚 Definitions & Concepts",
     "programming": "💻 Programming & Syntax",
     "trivia": "🧠 General Knowledge",
+    "general": "📚 General Flashcard",
     "custom": "✏️ Custom Prompt"
 }
 
@@ -264,16 +266,73 @@ async def process_comment(message: Message, state: FSMContext):
 async def process_ai_preset(message: Message, state: FSMContext):
     preset_text = message.text.strip()
     
+    if preset_text in ["🔙 Keep Current Preset", "🔙 Back"]:
+        data = await state.get_data()
+        category = data.get("category", "General")
+        user_id = message.from_user.id
+        deck_setting = database.get_deck_setting(user_id, category)
+        
+        if deck_setting:
+            preset_key = deck_setting.get("preset_key", "general")
+            source_language = deck_setting.get("source_language")
+            target_language = deck_setting.get("target_language")
+            custom_prompt = deck_setting.get("custom_prompt")
+            preset_name = PRESET_NAME_MAP.get(preset_key, "AI Card")
+            await state.update_data(
+                is_ai=True,
+                preset_key=preset_key,
+                preset_text=preset_name,
+                source_language=source_language,
+                target_language=target_language,
+                custom_prompt=custom_prompt,
+                has_saved_prompt=True
+            )
+        await state.set_state(CreateCardStates.waiting_for_ai_topic)
+        await message.answer(
+            f"👌 Kept prompt preset for deck *{category}*.\n\n"
+            "What word, phrase, or topic do you want the AI to create a card for?",
+            reply_markup=get_ai_topic_keyboard(has_saved_prompt=True),
+            parse_mode="Markdown"
+        )
+        return
+
     preset_map = {
         "🌐 Language Learning": "language",
         "📚 Definitions & Concepts": "definitions",
         "💻 Programming & Syntax": "programming",
         "🧠 General Knowledge": "trivia",
+        "📚 General Flashcard": "general",
         "✏️ Custom Prompt": "custom"
     }
     
     preset_key = preset_map.get(preset_text)
     if not preset_key:
+        data = await state.get_data()
+        category = data.get("category", "General")
+        user_id = message.from_user.id
+        deck_setting = database.get_deck_setting(user_id, category)
+        
+        # If user already had a saved deck setting and typed their topic word directly
+        if deck_setting:
+            saved_preset_key = deck_setting.get("preset_key", "general")
+            saved_s_lang = deck_setting.get("source_language")
+            saved_t_lang = deck_setting.get("target_language")
+            saved_custom_prompt = deck_setting.get("custom_prompt")
+            saved_preset_name = PRESET_NAME_MAP.get(saved_preset_key, "AI Card")
+            await state.update_data(
+                is_ai=True,
+                preset_key=saved_preset_key,
+                preset_text=saved_preset_name,
+                source_language=saved_s_lang,
+                target_language=saved_t_lang,
+                custom_prompt=saved_custom_prompt,
+                has_saved_prompt=True,
+                topic=preset_text
+            )
+            await state.set_state(CreateCardStates.waiting_for_ai_topic)
+            await generate_and_show_ai_preview(message, state)
+            return
+
         await message.answer("Please select a valid preset from the keyboard below.")
         return
         
@@ -294,7 +353,7 @@ async def process_ai_preset(message: Message, state: FSMContext):
             "✏️ **AI Step 3: Your Custom Prompt**\n\n"
             "Please type your custom instructions for generating the flashcard.\n"
             "For example: *Create a flashcard comparing synchronous vs asynchronous execution in Python*",
-            reply_markup=get_cancel_keyboard(),
+            reply_markup=get_cancel_or_back_keyboard(),
             parse_mode="Markdown"
         )
     else:
@@ -376,8 +435,48 @@ async def process_target_language(message: Message, state: FSMContext):
 @router.message(CreateCardStates.waiting_for_ai_custom_prompt)
 async def process_ai_custom_prompt(message: Message, state: FSMContext):
     custom_prompt = message.text.strip()
+    
+    if custom_prompt in ["🔙 Back", "🔙 Keep Current Preset"]:
+        data = await state.get_data()
+        category = data.get("category", "General")
+        user_id = message.from_user.id
+        deck_setting = database.get_deck_setting(user_id, category)
+        
+        if deck_setting:
+            preset_key = deck_setting.get("preset_key", "general")
+            source_language = deck_setting.get("source_language")
+            target_language = deck_setting.get("target_language")
+            c_prompt = deck_setting.get("custom_prompt")
+            preset_name = PRESET_NAME_MAP.get(preset_key, "AI Card")
+            await state.update_data(
+                is_ai=True,
+                preset_key=preset_key,
+                preset_text=preset_name,
+                source_language=source_language,
+                target_language=target_language,
+                custom_prompt=c_prompt,
+                has_saved_prompt=True
+            )
+            await state.set_state(CreateCardStates.waiting_for_ai_topic)
+            await message.answer(
+                f"👌 Kept prompt setting for *{category}*.\n\n"
+                "What word, phrase, or topic do you want the AI to create a card for?",
+                reply_markup=get_ai_topic_keyboard(has_saved_prompt=True),
+                parse_mode="Markdown"
+            )
+            return
+        else:
+            await state.set_state(CreateCardStates.waiting_for_ai_prompt_preset)
+            await message.answer(
+                f"🎯 **AI Step 2: Choose Prompt Type** (Category: *{category}*)\n\n"
+                "Select one of the default AI prompt presets below, or choose ✏️ **Custom Prompt** to write your own instructions:",
+                reply_markup=get_ai_prompt_presets_keyboard(),
+                parse_mode="Markdown"
+            )
+            return
+
     if not custom_prompt:
-        await message.answer("Please enter a non-empty custom prompt.")
+        await message.answer("Please enter a non-empty custom prompt or tap 🔙 Back.")
         return
         
     await state.update_data(custom_prompt=custom_prompt)
@@ -436,12 +535,13 @@ async def process_ai_topic(message: Message, state: FSMContext):
         
         prompt_detail = f"\n\n📜 **Full AI System Instruction Prompt:**\n```\n{full_instruction}\n```" if full_instruction else ""
         
+        has_existing_setting = deck_setting is not None or preset_key is not None
         await message.answer(
             f"⚙️ **Change Deck Prompt** (Category: *{category}*)\n\n"
             f"📌 **Current Preset:** {current_setting_str}"
             f"{prompt_detail}\n\n"
             "Select a new prompt preset below to update the AI instructions for this deck:",
-            reply_markup=get_ai_prompt_presets_keyboard(),
+            reply_markup=get_ai_prompt_presets_keyboard(allow_keep=has_existing_setting),
             parse_mode="Markdown"
         )
         return
@@ -502,13 +602,46 @@ async def process_ai_topic(message: Message, state: FSMContext):
 
 async def generate_and_show_ai_preview(message: Message, state: FSMContext):
     data = await state.get_data()
-    preset_key = data.get("preset_key", "language")
-    preset_text = data.get("preset_text", "Default Preset")
-    topic = data.get("topic", "")
-    custom_prompt = data.get("custom_prompt")
-    source_language = data.get("source_language")
-    target_language = data.get("target_language")
     category = data.get("category", "General")
+    user_id = message.from_user.id
+    deck_setting = database.get_deck_setting(user_id, category)
+    
+    preset_key = data.get("preset_key")
+    if not preset_key and deck_setting:
+        preset_key = deck_setting.get("preset_key")
+    if not preset_key:
+        preset_key = "language"
+        
+    custom_prompt = data.get("custom_prompt")
+    if custom_prompt is None and deck_setting:
+        custom_prompt = deck_setting.get("custom_prompt")
+        
+    source_language = data.get("source_language")
+    if source_language is None and deck_setting:
+        source_language = deck_setting.get("source_language")
+        
+    target_language = data.get("target_language")
+    if target_language is None and deck_setting:
+        target_language = deck_setting.get("target_language")
+        
+    # If state was set to custom without a prompt, but deck has a saved non-custom preset, restore it
+    if preset_key == "custom" and not (custom_prompt or "").strip() and deck_setting and deck_setting.get("preset_key") != "custom":
+        preset_key = deck_setting.get("preset_key", "language")
+        source_language = deck_setting.get("source_language")
+        target_language = deck_setting.get("target_language")
+        custom_prompt = deck_setting.get("custom_prompt")
+        
+    preset_text = data.get("preset_text") or PRESET_NAME_MAP.get(preset_key, "AI Card")
+    topic = data.get("topic", "")
+    
+    # Update state data with resolved values
+    await state.update_data(
+        preset_key=preset_key,
+        preset_text=preset_text,
+        source_language=source_language,
+        target_language=target_language,
+        custom_prompt=custom_prompt
+    )
     
     wait_msg = await message.answer("🤖 *Generating flashcard with AI... Please wait a moment.*", parse_mode="Markdown")
     
@@ -565,10 +698,11 @@ async def generate_and_show_ai_preview(message: Message, state: FSMContext):
         except Exception:
             pass
             
+        has_saved = deck_setting is not None or data.get("has_saved_prompt", False)
         await message.answer(
             f"❌ **AI Generation Failed**\n\nError: `{str(e)}`\n\n"
             "You can try again, enter a different topic, or cancel.",
-            reply_markup=get_cancel_keyboard(),
+            reply_markup=get_ai_topic_keyboard(has_saved_prompt=has_saved),
             parse_mode="Markdown"
         )
 

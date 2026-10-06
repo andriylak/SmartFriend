@@ -3,6 +3,7 @@ from ai_service import (
     clean_json_text,
     parse_card_json,
     format_comment,
+    get_full_prompt_text,
     PRESET_PROMPTS
 )
 
@@ -72,7 +73,28 @@ Hope that helps!"""
         self.assertIn("definitions", PRESET_PROMPTS)
         self.assertIn("programming", PRESET_PROMPTS)
         self.assertIn("trivia", PRESET_PROMPTS)
+        self.assertIn("general", PRESET_PROMPTS)
         self.assertIn("custom", PRESET_PROMPTS)
+
+    def test_get_full_prompt_text_edge_cases(self):
+        # General preset
+        prompt_gen = get_full_prompt_text("general")
+        self.assertIn("[Your Word/Topic]", prompt_gen)
+        
+        # Custom preset with empty or None prompt should NOT raise KeyError
+        prompt_custom_none = get_full_prompt_text("custom", custom_prompt=None)
+        self.assertIn("[Your Word/Topic]", prompt_custom_none)
+        
+        prompt_custom_empty = get_full_prompt_text("custom", custom_prompt="   ")
+        self.assertIn("[Your Word/Topic]", prompt_custom_empty)
+        
+        # Valid custom prompt
+        prompt_custom_valid = get_full_prompt_text("custom", custom_prompt="Translate and give synonyms")
+        self.assertIn("Translate and give synonyms", prompt_custom_valid)
+
+        # Unrecognized preset key should gracefully fall back to general without raising KeyError
+        prompt_unknown = get_full_prompt_text("non_existent_key")
+        self.assertIn("[Your Word/Topic]", prompt_unknown)
 
     def test_language_preset_prompt_formatting(self):
         instruction = PRESET_PROMPTS["language"]["system_instruction"].format(

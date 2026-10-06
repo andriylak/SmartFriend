@@ -22,6 +22,15 @@ def get_cancel_keyboard():
     )
     return keyboard
 
+def get_cancel_or_back_keyboard():
+    keyboard = ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="🔙 Back"), KeyboardButton(text="❌ Cancel")]
+        ],
+        resize_keyboard=True
+    )
+    return keyboard
+
 def get_skip_keyboard():
     keyboard = ReplyKeyboardMarkup(
         keyboard=[
@@ -110,14 +119,18 @@ def get_card_creation_mode_keyboard():
     )
     return keyboard
 
-def get_ai_prompt_presets_keyboard():
+def get_ai_prompt_presets_keyboard(allow_keep: bool = False):
+    rows = [
+        [KeyboardButton(text="🌐 Language Learning"), KeyboardButton(text="📚 Definitions & Concepts")],
+        [KeyboardButton(text="💻 Programming & Syntax"), KeyboardButton(text="🧠 General Knowledge")],
+        [KeyboardButton(text="✏️ Custom Prompt")]
+    ]
+    if allow_keep:
+        rows.append([KeyboardButton(text="🔙 Keep Current Preset"), KeyboardButton(text="❌ Cancel")])
+    else:
+        rows.append([KeyboardButton(text="❌ Cancel")])
     keyboard = ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="🌐 Language Learning"), KeyboardButton(text="📚 Definitions & Concepts")],
-            [KeyboardButton(text="💻 Programming & Syntax"), KeyboardButton(text="🧠 General Knowledge")],
-            [KeyboardButton(text="✏️ Custom Prompt")],
-            [KeyboardButton(text="❌ Cancel")]
-        ],
+        keyboard=rows,
         resize_keyboard=True,
         placeholder="Select AI prompt preset..."
     )

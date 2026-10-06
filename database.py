@@ -842,11 +842,20 @@ def get_user_categories(user_id: int):
     conn.close()
     return sorted(list(set(personal_cats + collab_cats)))
 
-def save_deck_setting(user_id: int, category: str, preset_key: str = "general", source_language: str = None, target_language: str = None, custom_prompt: str = None, daily_new_limit: int = None):
+def save_deck_setting(user_id: int, category: str, preset_key: str = None, source_language: str = None, target_language: str = None, custom_prompt: str = None, daily_new_limit: int = None):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
+    existing = get_deck_setting(user_id, category)
+    
+    if preset_key is None:
+        preset_key = existing.get("preset_key", "general") if existing else "general"
+    if source_language is None and existing:
+        source_language = existing.get("source_language")
+    if target_language is None and existing:
+        target_language = existing.get("target_language")
+    if custom_prompt is None and existing:
+        custom_prompt = existing.get("custom_prompt")
     if daily_new_limit is None:
-        existing = get_deck_setting(user_id, category)
         daily_new_limit = existing.get("daily_new_limit", 20) if existing else 20
 
     cursor.execute(
@@ -870,7 +879,7 @@ def get_deck_setting(user_id: int, category: str):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute(
-        "SELECT preset_key, source_language, target_language, custom_prompt, daily_new_limit FROM deck_settings WHERE user_id = ? AND category = ?",
+        "SELECT preset_key, source_language, target_language, custom_prompt, daily_new_limit FROM deck_settings WHERE user_id = ? AND category = ? COLLATE NOCASE",
         (user_id, category)
     )
     row = cursor.fetchone()

@@ -11,6 +11,7 @@ from aiogram.fsm.state import State, StatesGroup
 import database
 import ai_service
 from ai_service import format_comment
+from handlers.cards import PRESET_NAME_MAP
 from keyboards import (
     get_main_keyboard,
     get_cancel_keyboard,
@@ -89,7 +90,8 @@ async def process_cfg_deck(callback: CallbackQuery, state: FSMContext):
     
     limit = setting.get("daily_new_limit", 20) if setting else 20
     limit_str = "Unlimited" if limit <= 0 else f"{limit} cards/day"
-    preset = setting.get("preset_key", "general") if setting else "general"
+    raw_preset = setting.get("preset_key", "general") if setting else "general"
+    preset = PRESET_NAME_MAP.get(raw_preset, raw_preset)
 
     collab_deck = database.get_collaborative_deck_for_user(user_id, category)
     is_collab = collab_deck is not None
