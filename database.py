@@ -4,7 +4,7 @@ import re
 import difflib
 import secrets
 
-DB_PATH = "learning_bot.db"
+DB_PATH = os.getenv("DB_PATH", "learning_bot.db")
 
 def init_db():
     conn = sqlite3.connect(DB_PATH)
