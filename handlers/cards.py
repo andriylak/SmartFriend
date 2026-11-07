@@ -805,6 +805,16 @@ async def start_edit_ai_question(callback: CallbackQuery, state: FSMContext):
     )
     await callback.answer()
 
+@router.callback_query(CreateCardStates.waiting_for_ai_preview, F.data == "ai_edit_a")
+async def start_edit_ai_answer(callback: CallbackQuery, state: FSMContext):
+    await state.set_state(CreateCardStates.waiting_for_edit_answer)
+    await callback.message.answer(
+        "✏️ **Edit Answer**\n\nPlease type the updated **Answer** text below:",
+        reply_markup=get_cancel_keyboard(),
+        parse_mode="Markdown"
+    )
+    await callback.answer()
+
 @router.callback_query(CreateCardStates.waiting_for_ai_preview, F.data == "ai_edit_c")
 async def start_edit_ai_comment(callback: CallbackQuery, state: FSMContext):
     await state.set_state(CreateCardStates.waiting_for_edit_comment)

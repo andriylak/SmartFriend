@@ -76,7 +76,6 @@ async def start_quiz(message: Message, state: FSMContext):
     )
     await state.update_data(study_msg_id=sent_msg.message_id)
 
-@router.callback_query(QuizStates.selecting_category, F.data == "quiz_cfg_list")
 @router.callback_query(F.data == "quiz_cfg_list")
 async def process_quiz_cfg_list(callback: CallbackQuery, state: FSMContext):
     user_id = callback.from_user.id
@@ -165,12 +164,16 @@ async def process_daily_limit_input(message: Message, state: FSMContext):
     
     database.save_deck_setting(user_id, category, daily_new_limit=new_limit)
     
+    collab_deck = database.get_collaborative_deck_for_user(user_id, category)
+    is_collab = collab_deck is not None
+    is_owner = (collab_deck["owner_id"] == user_id) if is_collab else True
+
     await state.set_state(QuizStates.selecting_category)
     limit_display = "Unlimited" if new_limit <= 0 else f"{new_limit} cards/day"
     
     await message.answer(
         f"✅ Daily new card limit for <b>{escape(category)}</b> set to <b>{limit_display}</b>.",
-        reply_markup=get_deck_config_menu_keyboard(category),
+        reply_markup=get_deck_config_menu_keyboard(category, is_collab=is_collab, is_owner=is_owner),
         parse_mode="HTML"
     )
 
@@ -712,7 +715,6 @@ def format_study_delete_confirm_text(card: dict) -> str:
         "⚠️ <i>This action cannot be undone and will delete both sides of the card.</i>"
     )
 
-@router.callback_query(QuizStates.studying, F.data.startswith("study_delete_"))
 @router.callback_query(F.data.startswith("study_delete_"))
 async def process_study_delete(callback: CallbackQuery, state: FSMContext):
     raw = callback.data.split("study_delete_")[1]
@@ -750,7 +752,6 @@ async def process_study_delete(callback: CallbackQuery, state: FSMContext):
         await callback.message.answer(confirm_text, reply_markup=confirm_kb, parse_mode="HTML")
     await callback.answer()
 
-@router.callback_query(QuizStates.studying, F.data.startswith("confirm_study_del_"))
 @router.callback_query(F.data.startswith("confirm_study_del_"))
 async def process_confirm_study_delete(callback: CallbackQuery, state: FSMContext):
     card_id = int(callback.data.split("confirm_study_del_")[1])
@@ -763,7 +764,6 @@ async def process_confirm_study_delete(callback: CallbackQuery, state: FSMContex
     active_category = state_data.get("active_category")
     await send_next_card(callback.message, user_id, active_category, state, edit_existing=True)
 
-@router.callback_query(QuizStates.studying, F.data.startswith("cancel_study_del_"))
 @router.callback_query(F.data.startswith("cancel_study_del_"))
 async def process_cancel_study_delete(callback: CallbackQuery, state: FSMContext):
     raw = callback.data.split("cancel_study_del_")[1]
@@ -830,7 +830,6 @@ async def send_card_edit_menu(target_msg, user_id: int, card_id: int, status_pre
             pass
     await target_msg.answer(msg_text, reply_markup=markup, parse_mode="HTML")
 
-@router.callback_query(QuizStates.studying, F.data.startswith("study_edit_"))
 @router.callback_query(F.data.startswith("study_edit_"))
 async def process_study_edit(callback: CallbackQuery, state: FSMContext):
     card_id = int(callback.data.split("study_edit_")[1])

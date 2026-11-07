@@ -24,6 +24,7 @@ from handlers.quiz import (
     process_confirm_study_delete,
     process_cancel_study_delete,
     process_cfg_deck,
+    process_daily_limit_input,
     process_cfg_preset,
     process_cfg_select_preset,
     process_cfg_lang_src_btn,
@@ -595,6 +596,29 @@ class TestDeckPresetManager(unittest.TestCase):
             mock_msg.answer.assert_called_once()
             call_text = mock_msg.answer.call_args[0][0]
             self.assertIn("Custom Prompt Saved!", call_text)
+
+        asyncio.run(run_test())
+
+    @patch("database.get_collaborative_deck_for_user")
+    @patch("database.save_deck_setting")
+    def test_daily_limit_input_preserves_collab_member_menu(self, mock_save_setting, mock_get_collab):
+        mock_get_collab.return_value = {"id": 10, "name": "SharedSpanish", "owner_id": 9999}
+        mock_msg = AsyncMock()
+        mock_msg.text = "30"
+        mock_msg.from_user.id = 1000  # non-owner member
+        mock_msg.answer = AsyncMock()
+
+        async def run_test():
+            await self.state.update_data(active_config_deck="SharedSpanish")
+            await self.state.set_state(QuizStates.waiting_daily_limit)
+
+            await process_daily_limit_input(mock_msg, self.state)
+            mock_save_setting.assert_called_once_with(1000, "SharedSpanish", daily_new_limit=30)
+            mock_msg.answer.assert_called_once()
+            markup = mock_msg.answer.call_args[1].get("reply_markup")
+            buttons = [btn.callback_data for row in markup.inline_keyboard for btn in row]
+            self.assertIn("ask_leave_deck_SharedSpanish", buttons)
+            self.assertNotIn("ask_del_deck_SharedSpanish", buttons)
 
         asyncio.run(run_test())
 

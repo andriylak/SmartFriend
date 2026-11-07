@@ -4,7 +4,7 @@ import asyncio
 
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.memory import MemoryStorage, StorageKey
-from aiogram.types import Message, User, Chat
+from aiogram.types import Message, CallbackQuery, User, Chat
 
 import database
 import ai_service
@@ -13,6 +13,8 @@ from handlers.cards import (
     process_ai_preset,
     process_ai_custom_prompt,
     generate_and_show_ai_preview,
+    start_edit_ai_answer,
+    process_edited_answer,
     PRESET_NAME_MAP
 )
 
@@ -159,6 +161,34 @@ class TestPromptRecovery(unittest.TestCase):
             self.assertEqual(called_kwargs["preset_key"], "language")
             self.assertEqual(called_kwargs["source_language"], "Czech")
             self.assertEqual(called_kwargs["target_language"], "English")
+
+        asyncio.run(run_test())
+
+    def test_edit_ai_answer_flow(self):
+        mock_cb = AsyncMock(spec=CallbackQuery)
+        mock_cb.data = "ai_edit_a"
+        mock_cb.answer = AsyncMock()
+        mock_cb.message = AsyncMock(spec=Message)
+        mock_cb.message.answer = AsyncMock()
+
+        mock_msg = AsyncMock(spec=Message)
+        mock_msg.text = "updated answer"
+        mock_msg.answer = AsyncMock()
+
+        async def run_test():
+            await self.state.set_state(CreateCardStates.waiting_for_ai_preview)
+            await self.state.update_data(category="Spanish", question="el perro", answer="dog")
+
+            await start_edit_ai_answer(mock_cb, self.state)
+            self.assertEqual(await self.state.get_state(), CreateCardStates.waiting_for_edit_answer.state)
+            mock_cb.message.answer.assert_called_once()
+
+            await process_edited_answer(mock_msg, self.state)
+            self.assertEqual(await self.state.get_state(), CreateCardStates.waiting_for_ai_preview.state)
+            data = await self.state.get_data()
+            self.assertEqual(data.get("answer"), "updated answer")
+            mock_msg.answer.assert_called_once()
+            self.assertIn("updated answer", mock_msg.answer.call_args[0][0])
 
         asyncio.run(run_test())
 
