@@ -139,25 +139,33 @@ def init_db():
         cursor.execute("ALTER TABLE cards ADD COLUMN collab_deck_id INTEGER DEFAULT NULL")
 
     # Migration: Auto-generate missing reverse cards for existing cards
-    cursor.execute("SELECT id, user_id, question, answer, comment, category, collab_deck_id FROM cards WHERE direction IS NULL OR direction = 'standard'")
-    std_cards = cursor.fetchall()
-    for std_card in std_cards:
-        c_id, u_id, q, a, comm, cat, c_deck_id = std_card
-        if c_deck_id is not None:
-            cursor.execute(
-                "SELECT id FROM cards WHERE collab_deck_id = ? AND direction = 'reverse' AND question = ? AND answer = ?",
-                (c_deck_id, a, q)
-            )
-        else:
-            cursor.execute(
-                "SELECT id FROM cards WHERE user_id = ? AND category = ? AND direction = 'reverse' AND question = ? AND answer = ? AND collab_deck_id IS NULL",
-                (u_id, cat, a, q)
-            )
-        if not cursor.fetchone():
-            cursor.execute(
-                "INSERT INTO cards (user_id, question, answer, comment, category, direction, next_review_at, interval_days, ease_factor, repetition_count, collab_deck_id) VALUES (?, ?, ?, ?, ?, 'reverse', CURRENT_TIMESTAMP, 0, 2.5, 0, ?)",
-                (u_id, a, q, comm, cat, c_deck_id)
-            )
+    cursor.execute("""
+        INSERT INTO cards (
+            user_id, question, answer, comment, category, direction,
+            next_review_at, interval_days, ease_factor, repetition_count, collab_deck_id
+        )
+        SELECT
+            s.user_id, s.answer, s.question, s.comment, s.category, 'reverse',
+            CURRENT_TIMESTAMP, 0, 2.5, 0, s.collab_deck_id
+        FROM cards s
+        WHERE (s.direction IS NULL OR s.direction = 'standard')
+          AND NOT EXISTS (
+              SELECT 1 FROM cards r
+              WHERE r.direction = 'reverse'
+                AND r.question = s.answer
+                AND r.answer = s.question
+                AND (
+                    (s.collab_deck_id IS NOT NULL AND r.collab_deck_id = s.collab_deck_id)
+                    OR (s.collab_deck_id IS NULL AND r.collab_deck_id IS NULL AND r.user_id = s.user_id AND r.category = s.category)
+                )
+          )
+    """)
+
+    # Indexes for frequent lookup patterns
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_cards_user_cat ON cards(user_id, collab_deck_id, category)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_cards_collab_deck ON cards(collab_deck_id, direction)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_daily_log_lookup ON daily_new_cards_log(user_id, studied_date, category)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_deck_members_user ON collaborative_deck_members(user_id, deck_id)")
         
     conn.commit()
     conn.close()
@@ -202,7 +210,7 @@ def get_user_cards(user_id: int, category: str = None):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
 
-    collab_deck = get_collaborative_deck_for_user(user_id, category) if category else None
+    collab_deck = get_collaborative_deck_for_user(user_id, category, cursor=cursor) if category else None
 
     if collab_deck:
         cursor.execute(
@@ -268,9 +276,40 @@ def get_user_cards(user_id: int, category: str = None):
     conn.close()
     return [_row_to_card_dict(row) for row in rows]
 
-def get_new_cards_studied_today(user_id: int, category: str = None) -> int:
+def get_card_by_id(card_id: int, user_id: int):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
+    cursor.execute(
+        """
+        SELECT
+            c.id, c.question, c.answer, c.comment, c.category,
+            CASE WHEN c.collab_deck_id IS NOT NULL THEN COALESCE(ucp.correct_count, 0) ELSE c.correct_count END,
+            CASE WHEN c.collab_deck_id IS NOT NULL THEN COALESCE(ucp.incorrect_count, 0) ELSE c.incorrect_count END,
+            CASE WHEN c.collab_deck_id IS NOT NULL THEN COALESCE(ucp.next_review_at, c.created_at) ELSE c.next_review_at END,
+            CASE WHEN c.collab_deck_id IS NOT NULL THEN COALESCE(ucp.interval_days, 0) ELSE c.interval_days END,
+            CASE WHEN c.collab_deck_id IS NOT NULL THEN COALESCE(ucp.ease_factor, 2.5) ELSE c.ease_factor END,
+            CASE WHEN c.collab_deck_id IS NOT NULL THEN COALESCE(ucp.repetition_count, 0) ELSE c.repetition_count END,
+            c.direction
+        FROM cards c
+        LEFT JOIN collaborative_deck_members cdm ON c.collab_deck_id = cdm.deck_id AND cdm.user_id = ?
+        LEFT JOIN user_card_progress ucp ON c.id = ucp.card_id AND ucp.user_id = ?
+        WHERE c.id = ?
+          AND (
+              (c.collab_deck_id IS NULL AND c.user_id = ?)
+              OR (c.collab_deck_id IS NOT NULL AND cdm.user_id IS NOT NULL AND COALESCE(ucp.is_hidden, 0) = 0)
+          )
+        """,
+        (user_id, user_id, card_id, user_id)
+    )
+    row = cursor.fetchone()
+    conn.close()
+    return _row_to_card_dict(row) if row else None
+
+def get_new_cards_studied_today(user_id: int, category: str = None, cursor=None) -> int:
+    own_conn = cursor is None
+    if own_conn:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
     if category:
         cursor.execute(
             "SELECT COUNT(DISTINCT card_id) FROM daily_new_cards_log WHERE user_id = ? AND category = ? AND studied_date = date('now', 'localtime')",
@@ -283,7 +322,8 @@ def get_new_cards_studied_today(user_id: int, category: str = None) -> int:
         )
     row = cursor.fetchone()
     count = row[0] if row else 0
-    conn.close()
+    if own_conn:
+        conn.close()
     return count
 
 def get_due_cards(user_id: int, category: str = None, study_all: bool = False):
@@ -291,7 +331,7 @@ def get_due_cards(user_id: int, category: str = None, study_all: bool = False):
     cursor = conn.cursor()
     if study_all:
         if category:
-            collab_deck = get_collaborative_deck_for_user(user_id, category)
+            collab_deck = get_collaborative_deck_for_user(user_id, category, cursor=cursor)
             if collab_deck:
                 cursor.execute(
                     """
@@ -334,7 +374,7 @@ def get_due_cards(user_id: int, category: str = None, study_all: bool = False):
         rows = cursor.fetchall()
         conn.close()
     else:
-        categories_to_check = [category] if category else get_user_categories(user_id)
+        categories_to_check = [category] if category else get_user_categories(user_id, cursor=cursor)
 
         due_learning_rows = []
         due_review_rows = []
@@ -342,10 +382,10 @@ def get_due_cards(user_id: int, category: str = None, study_all: bool = False):
         learning_ahead_rows = []
 
         for cat in categories_to_check:
-            collab_deck = get_collaborative_deck_for_user(user_id, cat)
-            setting = get_deck_setting(user_id, cat)
+            collab_deck = get_collaborative_deck_for_user(user_id, cat, cursor=cursor)
+            setting = get_deck_setting(user_id, cat, cursor=cursor)
             limit = setting.get("daily_new_limit", 20) if setting else 20
-            studied_today = get_new_cards_studied_today(user_id, cat)
+            studied_today = get_new_cards_studied_today(user_id, cat, cursor=cursor)
             fetch_limit = -1 if limit <= 0 else max(0, limit - studied_today)
             limit_clause = f" LIMIT {fetch_limit}" if fetch_limit > 0 else ""
 
@@ -476,15 +516,83 @@ def get_due_cards(user_id: int, category: str = None, study_all: bool = False):
     return [_row_to_card_dict(row) for row in rows]
 
 def get_due_card_counts(user_id: int):
-    categories = get_user_categories(user_id)
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    categories = get_user_categories(user_id, cursor=cursor)
     counts = {}
     total_due = 0
     for cat in categories:
-        due_cards = get_due_cards(user_id, category=cat, study_all=False)
-        cat_count = len(due_cards)
+        collab_deck = get_collaborative_deck_for_user(user_id, cat, cursor=cursor)
+        setting = get_deck_setting(user_id, cat, cursor=cursor)
+        limit = setting.get("daily_new_limit", 20) if setting else 20
+        studied_today = get_new_cards_studied_today(user_id, cat, cursor=cursor)
+        fetch_limit = -1 if limit <= 0 else max(0, limit - studied_today)
+
+        if collab_deck:
+            deck_id = collab_deck["id"]
+            cursor.execute(
+                """
+                SELECT COUNT(*)
+                FROM cards c
+                LEFT JOIN user_card_progress ucp ON c.id = ucp.card_id AND ucp.user_id = ?
+                WHERE c.collab_deck_id = ?
+                  AND COALESCE(ucp.is_hidden, 0) = 0
+                  AND (COALESCE(ucp.correct_count, 0) > 0 OR COALESCE(ucp.incorrect_count, 0) > 0 OR COALESCE(ucp.repetition_count, 0) > 0)
+                  AND (ucp.next_review_at IS NULL OR ucp.next_review_at <= CURRENT_TIMESTAMP OR COALESCE(ucp.interval_days, 0) < 1.0)
+                """,
+                (user_id, deck_id)
+            )
+            studied_due_count = cursor.fetchone()[0]
+
+            new_due_count = 0
+            if fetch_limit != 0:
+                cursor.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM cards c
+                    LEFT JOIN user_card_progress ucp ON c.id = ucp.card_id AND ucp.user_id = ?
+                    WHERE c.collab_deck_id = ?
+                      AND COALESCE(ucp.is_hidden, 0) = 0
+                      AND COALESCE(ucp.correct_count, 0) = 0 AND COALESCE(ucp.incorrect_count, 0) = 0 AND COALESCE(ucp.repetition_count, 0) = 0
+                      AND (ucp.next_review_at IS NULL OR ucp.next_review_at <= CURRENT_TIMESTAMP)
+                    """,
+                    (user_id, deck_id)
+                )
+                raw_new = cursor.fetchone()[0]
+                new_due_count = min(raw_new, fetch_limit) if fetch_limit > 0 else raw_new
+        else:
+            cursor.execute(
+                """
+                SELECT COUNT(*)
+                FROM cards
+                WHERE user_id = ? AND category = ? AND collab_deck_id IS NULL
+                  AND (correct_count > 0 OR incorrect_count > 0 OR repetition_count > 0)
+                  AND (next_review_at IS NULL OR next_review_at <= CURRENT_TIMESTAMP OR interval_days < 1.0)
+                """,
+                (user_id, cat)
+            )
+            studied_due_count = cursor.fetchone()[0]
+
+            new_due_count = 0
+            if fetch_limit != 0:
+                cursor.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM cards
+                    WHERE user_id = ? AND category = ? AND collab_deck_id IS NULL
+                      AND correct_count = 0 AND incorrect_count = 0 AND repetition_count = 0
+                      AND (next_review_at IS NULL OR next_review_at <= CURRENT_TIMESTAMP)
+                    """,
+                    (user_id, cat)
+                )
+                raw_new = cursor.fetchone()[0]
+                new_due_count = min(raw_new, fetch_limit) if fetch_limit > 0 else raw_new
+
+        cat_count = studied_due_count + new_due_count
         counts[cat] = cat_count
         total_due += cat_count
 
+    conn.close()
     counts["_all_"] = total_due
     return counts
 
@@ -800,9 +908,11 @@ def update_card_srs(card_id: int, user_id: int, rating: str) -> dict:
         "rating": rating
     }
 
-def get_user_categories(user_id: int):
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
+def get_user_categories(user_id: int, cursor=None):
+    own_conn = cursor is None
+    if own_conn:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
     cursor.execute(
         "SELECT DISTINCT category FROM cards WHERE user_id = ? AND collab_deck_id IS NULL",
         (user_id,)
@@ -818,13 +928,14 @@ def get_user_categories(user_id: int):
         (user_id,)
     )
     collab_cats = [row[0] for row in cursor.fetchall()]
-    conn.close()
+    if own_conn:
+        conn.close()
     return sorted(list(set(personal_cats + collab_cats)))
 
 def save_deck_setting(user_id: int, category: str, preset_key: str = None, source_language: str = None, target_language: str = None, custom_prompt: str = None, daily_new_limit: int = None):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    existing = get_deck_setting(user_id, category)
+    existing = get_deck_setting(user_id, category, cursor=cursor)
     
     if preset_key is None:
         preset_key = existing.get("preset_key", "general") if existing else "general"
@@ -854,15 +965,18 @@ def save_deck_setting(user_id: int, category: str, preset_key: str = None, sourc
     conn.commit()
     conn.close()
 
-def get_deck_setting(user_id: int, category: str):
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
+def get_deck_setting(user_id: int, category: str, cursor=None):
+    own_conn = cursor is None
+    if own_conn:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
     cursor.execute(
         "SELECT preset_key, source_language, target_language, custom_prompt, daily_new_limit FROM deck_settings WHERE user_id = ? AND category = ? COLLATE NOCASE",
         (user_id, category)
     )
     row = cursor.fetchone()
-    conn.close()
+    if own_conn:
+        conn.close()
     if row:
         return {
             "preset_key": row[0],
@@ -1099,11 +1213,13 @@ def update_card(card_id: int, user_id: int, question: str = None, answer: str = 
 
 # --- COLLABORATIVE & SHARED DECK FUNCTIONS ---
 
-def get_collaborative_deck_for_user(user_id: int, category: str):
+def get_collaborative_deck_for_user(user_id: int, category: str, cursor=None):
     if not category:
         return None
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
+    own_conn = cursor is None
+    if own_conn:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
     cursor.execute(
         """
         SELECT cd.id, cd.name, cd.owner_id, cd.created_at, cdm.role
@@ -1114,7 +1230,8 @@ def get_collaborative_deck_for_user(user_id: int, category: str):
         (user_id, category)
     )
     row = cursor.fetchone()
-    conn.close()
+    if own_conn:
+        conn.close()
     if row:
         return {
             "id": row[0],

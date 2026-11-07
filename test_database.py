@@ -518,6 +518,44 @@ class TestDatabase(unittest.TestCase):
         setting = database.get_deck_setting(user_id, cat_to_delete)
         self.assertIsNone(setting)
 
+    def test_get_card_by_id(self):
+        owner_id = 80001
+        other_id = 80002
+        member_id = 80003
+
+        # 1. Personal card lookup
+        cid = database.add_card(owner_id, "Q_Single", "A_Single", "PersonalDeck", comment="Note", create_pair=False)
+        card = database.get_card_by_id(cid, owner_id)
+        self.assertIsNotNone(card)
+        self.assertEqual(card["id"], cid)
+        self.assertEqual(card["question"], "Q_Single")
+        self.assertEqual(card["answer"], "A_Single")
+        self.assertEqual(card["comment"], "Note")
+
+        # Unauthorized user cannot fetch another user's personal card
+        self.assertIsNone(database.get_card_by_id(cid, other_id))
+        self.assertIsNone(database.get_card_by_id(9999999, owner_id))
+
+        # 2. Collaborative deck card lookup
+        collab_cid = database.add_card(owner_id, "Q_Collab", "A_Collab", "CollabDeck", create_pair=False)
+        token = database.create_deck_share(owner_id, "CollabDeck", share_type="collab")
+        joined, _, _ = database.join_collaborative_deck(member_id, token)
+        self.assertTrue(joined)
+
+        # Both owner and member can fetch the collaborative card
+        self.assertIsNotNone(database.get_card_by_id(collab_cid, owner_id))
+        member_card = database.get_card_by_id(collab_cid, member_id)
+        self.assertIsNotNone(member_card)
+        self.assertEqual(member_card["question"], "Q_Collab")
+
+        # Non-member cannot fetch the collaborative card
+        self.assertIsNone(database.get_card_by_id(collab_cid, other_id))
+
+        # If member deletes (hides) the card, get_card_by_id returns None for member but still returns for owner
+        database.delete_card(collab_cid, member_id)
+        self.assertIsNone(database.get_card_by_id(collab_cid, member_id))
+        self.assertIsNotNone(database.get_card_by_id(collab_cid, owner_id))
+
 if __name__ == "__main__":
     unittest.main()
 

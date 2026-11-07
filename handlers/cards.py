@@ -1131,9 +1131,13 @@ async def process_share_deck_menu(callback: CallbackQuery):
     await callback.answer()
 
 async def _get_bot_username(bot) -> str:
+    cached = getattr(bot, "__dict__", {}).get("_cached_username")
+    if isinstance(cached, str) and cached:
+        return cached
     try:
         me = await bot.get_me()
-        if me and me.username:
+        if me and isinstance(getattr(me, "username", None), str) and me.username:
+            bot._cached_username = me.username
             return me.username
     except Exception:
         pass

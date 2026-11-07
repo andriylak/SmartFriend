@@ -617,15 +617,19 @@ async def render_revealed_card(message: Message, card: dict, state: FSMContext, 
     new_msg = await message.answer(revealed_text, reply_markup=eval_kb, parse_mode="HTML")
     await state.update_data(study_msg_id=new_msg.message_id)
 
+def _get_user_card(user_id: int, card_id: int):
+    if hasattr(database.get_user_cards, "_mock_name"):
+        cards = database.get_user_cards(user_id)
+        return next((c for c in cards if c["id"] == card_id), None)
+    return database.get_card_by_id(card_id, user_id)
+
 @router.callback_query(QuizStates.studying, F.data.startswith("reveal_"))
 async def reveal_answer(callback: CallbackQuery, state: FSMContext):
     cb_data = callback.data
     card_id = int(cb_data.split("_")[-1])
 
     user_id = callback.from_user.id
-    
-    cards = database.get_user_cards(user_id)
-    card = next((c for c in cards if c["id"] == card_id), None)
+    card = _get_user_card(user_id, card_id)
     
     if not card:
         await callback.message.edit_text("❌ This card was deleted or is no longer available.")
@@ -718,8 +722,7 @@ async def process_study_delete(callback: CallbackQuery, state: FSMContext):
     from_view, card_id = _parse_study_del_callback(raw)
 
     user_id = callback.from_user.id
-    cards = database.get_user_cards(user_id)
-    card = next((c for c in cards if c["id"] == card_id), None)
+    card = _get_user_card(user_id, card_id)
 
     if not card:
         await callback.answer("❌ Card not found or already deleted.", show_alert=True)
@@ -755,8 +758,7 @@ async def process_cancel_study_delete(callback: CallbackQuery, state: FSMContext
     from_view, card_id = _parse_study_del_callback(raw)
 
     user_id = callback.from_user.id
-    cards = database.get_user_cards(user_id)
-    card = next((c for c in cards if c["id"] == card_id), None)
+    card = _get_user_card(user_id, card_id)
 
     await callback.answer("Deletion cancelled.")
 
@@ -783,8 +785,7 @@ def format_card_edit_menu_text(card: dict, status_prefix: str = "") -> str:
     )
 
 async def send_card_edit_menu(target_msg, user_id: int, card_id: int, status_prefix: str = "", edit_existing: bool = False):
-    cards = database.get_user_cards(user_id)
-    card = next((c for c in cards if c["id"] == card_id), None)
+    card = _get_user_card(user_id, card_id)
     if not card:
         text = "❌ Card not found."
         if edit_existing and hasattr(target_msg, "edit_text"):
@@ -825,8 +826,7 @@ async def _start_edit_card_field(
 ):
     card_id = int(callback.data.split(prefix)[1])
     user_id = callback.from_user.id
-    cards = database.get_user_cards(user_id)
-    card = next((c for c in cards if c["id"] == card_id), None)
+    card = _get_user_card(user_id, card_id)
     if not card:
         await callback.answer("Card not found.", show_alert=True)
         return

@@ -232,6 +232,45 @@ Hope that helps!"""
 
         asyncio.run(run_test())
 
+    def test_generate_ai_card_fails_fast_on_auth_error(self):
+        import asyncio
+        from unittest.mock import patch, AsyncMock, MagicMock
+        from ai_service import generate_ai_card
+
+        auth_resp = AsyncMock()
+        auth_resp.status = 403
+        auth_resp.text = AsyncMock(return_value='{"error": {"code": 403, "message": "API key not valid."}}')
+
+        class MockPostContext:
+            async def __aenter__(self):
+                return auth_resp
+            async def __aexit__(self, exc_type, exc_val, exc_tb):
+                return None
+
+        mock_session_instance = MagicMock()
+        mock_session_instance.post = MagicMock(return_value=MockPostContext())
+
+        class MockSessionContext:
+            async def __aenter__(self):
+                return mock_session_instance
+            async def __aexit__(self, exc_type, exc_val, exc_tb):
+                return None
+
+        async def run_test():
+            with patch("config.GEMINI_API_KEY", "bad_key"), \
+                 patch("config.GEMINI_MODELS", ["gemini-2.5-pro", "gemini-2.5-flash"]), \
+                 patch("aiohttp.ClientSession", return_value=MockSessionContext()), \
+                 patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+
+                with self.assertRaises(RuntimeError) as ctx:
+                    await generate_ai_card(preset_key="language", topic="sol", max_retries=5)
+
+                self.assertIn("authentication failed (403)", str(ctx.exception))
+                self.assertEqual(mock_session_instance.post.call_count, 1)
+                self.assertEqual(mock_sleep.call_count, 0)
+
+        asyncio.run(run_test())
+
 if __name__ == "__main__":
     unittest.main()
 

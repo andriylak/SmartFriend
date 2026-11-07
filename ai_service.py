@@ -333,6 +333,10 @@ async def generate_ai_card(
                                 err_detail = error_text[:200]
                             logger.warning(f"Model '{model}' attempt {attempt}/{retries} failed with status {resp.status}: {err_detail}")
                             last_error_msg = f"Model '{model}' ({resp.status}): {err_detail}"
+                            if resp.status in (401, 403):
+                                raise RuntimeError(f"Gemini API authentication failed ({resp.status}): {err_detail}")
+                except RuntimeError:
+                    raise
                 except Exception as e:
                     logger.warning(f"Network/API error with model '{model}' on attempt {attempt}/{retries}: {e}")
                     last_error_msg = f"Model '{model}' error: {e}"
