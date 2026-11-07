@@ -1,5 +1,4 @@
 import sqlite3
-import os
 import re
 import difflib
 import random
@@ -512,7 +511,6 @@ def get_random_card(user_id: int, category: str = None):
     cards = get_user_cards(user_id, category=category)
     if not cards:
         return None
-    import random
     return random.choice(cards)
 
 def delete_card(card_id: int, user_id: int) -> bool:
@@ -1174,32 +1172,6 @@ def get_collaborative_deck_members(deck_id: int):
     rows = cursor.fetchall()
     conn.close()
     return [{"user_id": r[0], "role": r[1], "joined_at": r[2]} for r in rows]
-
-def get_user_collaborative_decks(user_id: int):
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute(
-        """
-        SELECT cd.id, cd.name, cd.owner_id, cd.created_at, cdm.role
-        FROM collaborative_decks cd
-        JOIN collaborative_deck_members cdm ON cd.id = cdm.deck_id
-        WHERE cdm.user_id = ?
-        ORDER BY cd.name ASC
-        """,
-        (user_id,)
-    )
-    rows = cursor.fetchall()
-    conn.close()
-    return [
-        {
-            "id": r[0],
-            "name": r[1],
-            "owner_id": r[2],
-            "created_at": r[3],
-            "role": r[4]
-        }
-        for r in rows
-    ]
 
 def make_deck_collaborative(owner_id: int, category: str) -> int:
     existing = get_collaborative_deck_for_user(owner_id, category)

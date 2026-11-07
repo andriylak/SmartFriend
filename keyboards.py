@@ -1,5 +1,5 @@
 import urllib.parse
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
 
 def get_main_keyboard():
@@ -101,11 +101,6 @@ def get_study_ahead_keyboard(category: str):
         InlineKeyboardButton(text="❌ End Session", callback_data="study_stop")
     )
     builder.adjust(1)
-    return builder.as_markup()
-
-def get_delete_card_keyboard(card_id: int):
-    builder = InlineKeyboardBuilder()
-    builder.add(InlineKeyboardButton(text="🗑️ Delete Card", callback_data=f"delete_{card_id}"))
     return builder.as_markup()
 
 def get_card_creation_mode_keyboard():

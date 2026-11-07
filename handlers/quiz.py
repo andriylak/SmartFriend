@@ -1,5 +1,4 @@
 from html import escape
-import random
 import logging
 import re
 from aiogram import Router, F
@@ -10,7 +9,6 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 
 import database
-import ai_service
 from ai_service import format_comment
 from handlers.cards import PRESET_NAME_MAP
 from keyboards import (

@@ -1,7 +1,6 @@
 from html import escape
 import json
 import re
-import os
 import logging
 import aiohttp
 import asyncio
