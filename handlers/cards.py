@@ -11,7 +11,7 @@ from aiogram.fsm.state import State, StatesGroup
 import config
 import database
 import ai_service
-from ai_service import format_comment
+from ai_service import format_comment, PRESET_NAME_MAP, PRESET_BUTTON_TO_KEY
 from keyboards import (
     get_main_keyboard,
     get_cancel_keyboard,
@@ -37,14 +37,21 @@ logger = logging.getLogger(__name__)
 
 router = Router()
 
-PRESET_NAME_MAP = {
-    "language": "🌐 Language Learning",
-    "definitions": "📚 Definitions & Concepts",
-    "programming": "💻 Programming & Syntax",
-    "trivia": "🧠 General Knowledge",
-    "general": "📚 General Flashcard",
-    "custom": "✏️ Custom Prompt"
-}
+async def _restore_deck_setting_to_state(state: FSMContext, deck_setting: dict, **extra_updates) -> dict:
+    preset_key = deck_setting.get("preset_key", "general")
+    preset_text = PRESET_NAME_MAP.get(preset_key, "AI Card")
+    updates = {
+        "is_ai": True,
+        "preset_key": preset_key,
+        "preset_text": preset_text,
+        "source_language": deck_setting.get("source_language"),
+        "target_language": deck_setting.get("target_language"),
+        "custom_prompt": deck_setting.get("custom_prompt"),
+        "has_saved_prompt": True,
+        **extra_updates,
+    }
+    await state.update_data(**updates)
+    return updates
 
 class CreateCardStates(StatesGroup):
     waiting_for_mode = State()
@@ -107,21 +114,12 @@ async def process_category(message: Message, state: FSMContext):
     deck_setting = database.get_deck_setting(user_id, category)
     
     if deck_setting:
-        preset_key = deck_setting["preset_key"]
-        source_language = deck_setting.get("source_language")
-        target_language = deck_setting.get("target_language")
-        custom_prompt = deck_setting.get("custom_prompt")
-        preset_text = PRESET_NAME_MAP.get(preset_key, "AI Card")
-        
-        await state.update_data(
-            is_ai=True,
-            preset_key=preset_key,
-            preset_text=preset_text,
-            source_language=source_language,
-            target_language=target_language,
-            custom_prompt=custom_prompt,
-            has_saved_prompt=True
-        )
+        restored = await _restore_deck_setting_to_state(state, deck_setting)
+        preset_key = restored["preset_key"]
+        preset_text = restored["preset_text"]
+        source_language = restored["source_language"]
+        target_language = restored["target_language"]
+        custom_prompt = restored["custom_prompt"]
         await state.set_state(CreateCardStates.waiting_for_ai_topic)
         
         if preset_key == "language":
@@ -273,20 +271,7 @@ async def process_ai_preset(message: Message, state: FSMContext):
         deck_setting = database.get_deck_setting(user_id, category)
         
         if deck_setting:
-            preset_key = deck_setting.get("preset_key", "general")
-            source_language = deck_setting.get("source_language")
-            target_language = deck_setting.get("target_language")
-            custom_prompt = deck_setting.get("custom_prompt")
-            preset_name = PRESET_NAME_MAP.get(preset_key, "AI Card")
-            await state.update_data(
-                is_ai=True,
-                preset_key=preset_key,
-                preset_text=preset_name,
-                source_language=source_language,
-                target_language=target_language,
-                custom_prompt=custom_prompt,
-                has_saved_prompt=True
-            )
+            await _restore_deck_setting_to_state(state, deck_setting)
         await state.set_state(CreateCardStates.waiting_for_ai_topic)
         await message.answer(
             f"👌 Kept prompt preset for deck *{category}*.\n\n"
@@ -296,16 +281,7 @@ async def process_ai_preset(message: Message, state: FSMContext):
         )
         return
 
-    preset_map = {
-        "🌐 Language Learning": "language",
-        "📚 Definitions & Concepts": "definitions",
-        "💻 Programming & Syntax": "programming",
-        "🧠 General Knowledge": "trivia",
-        "📚 General Flashcard": "general",
-        "✏️ Custom Prompt": "custom"
-    }
-    
-    preset_key = preset_map.get(preset_text)
+    preset_key = PRESET_BUTTON_TO_KEY.get(preset_text)
     if not preset_key:
         data = await state.get_data()
         category = data.get("category", "General")
@@ -314,21 +290,7 @@ async def process_ai_preset(message: Message, state: FSMContext):
         
         # If user already had a saved deck setting and typed their topic word directly
         if deck_setting:
-            saved_preset_key = deck_setting.get("preset_key", "general")
-            saved_s_lang = deck_setting.get("source_language")
-            saved_t_lang = deck_setting.get("target_language")
-            saved_custom_prompt = deck_setting.get("custom_prompt")
-            saved_preset_name = PRESET_NAME_MAP.get(saved_preset_key, "AI Card")
-            await state.update_data(
-                is_ai=True,
-                preset_key=saved_preset_key,
-                preset_text=saved_preset_name,
-                source_language=saved_s_lang,
-                target_language=saved_t_lang,
-                custom_prompt=saved_custom_prompt,
-                has_saved_prompt=True,
-                topic=preset_text
-            )
+            await _restore_deck_setting_to_state(state, deck_setting, topic=preset_text)
             await state.set_state(CreateCardStates.waiting_for_ai_topic)
             await generate_and_show_ai_preview(message, state)
             return
@@ -443,20 +405,7 @@ async def process_ai_custom_prompt(message: Message, state: FSMContext):
         deck_setting = database.get_deck_setting(user_id, category)
         
         if deck_setting:
-            preset_key = deck_setting.get("preset_key", "general")
-            source_language = deck_setting.get("source_language")
-            target_language = deck_setting.get("target_language")
-            c_prompt = deck_setting.get("custom_prompt")
-            preset_name = PRESET_NAME_MAP.get(preset_key, "AI Card")
-            await state.update_data(
-                is_ai=True,
-                preset_key=preset_key,
-                preset_text=preset_name,
-                source_language=source_language,
-                target_language=target_language,
-                custom_prompt=c_prompt,
-                has_saved_prompt=True
-            )
+            await _restore_deck_setting_to_state(state, deck_setting)
             await state.set_state(CreateCardStates.waiting_for_ai_topic)
             await message.answer(
                 f"👌 Kept prompt setting for *{category}*.\n\n"
@@ -600,6 +549,43 @@ async def process_ai_topic(message: Message, state: FSMContext):
     await state.update_data(topic=topic)
     await generate_and_show_ai_preview(message, state)
 
+def _build_ai_preview_text(data: dict, title_suffix: str = "", correction_note: str = None) -> str:
+    category = data.get("category", "General")
+    preset_key = data.get("preset_key")
+    preset_text = data.get("preset_text", "AI Card")
+    question = data.get("question", "")
+    answer = data.get("answer", "")
+    comment = data.get("comment", "")
+
+    if preset_key == "language" and not title_suffix:
+        s_lang = data.get("source_language") or "Spanish"
+        t_lang = data.get("target_language") or "English"
+        lang_str = f"🌐 **Translate:** {s_lang} ➔ {t_lang}\n"
+    else:
+        lang_str = ""
+
+    correction_str = f"💡 **Note:** {correction_note}\n" if correction_note else ""
+    comment_formatted = format_comment(comment, fmt="markdown") if comment else ""
+    comment_str = f"📌 **Additional Info:**\n{comment_formatted}\n\n" if comment else ""
+    header = f"🤖 **AI Flashcard Preview ({title_suffix})**" if title_suffix else "🤖 **AI Flashcard Preview**"
+    action_prompt = (
+        "✨ *Would you like to save this card, edit it further, or regenerate?*"
+        if title_suffix
+        else "✨ *Would you like to save this card, edit it, or regenerate?*"
+    )
+
+    return (
+        f"{header}\n\n"
+        f"📁 **Category:** {category}\n"
+        f"🎯 **Preset:** {preset_text}\n"
+        f"{lang_str}"
+        f"{correction_str}\n"
+        f"❓ **Question:**\n{question}\n\n"
+        f"💡 **Answer:**\n{answer}\n\n"
+        f"{comment_str}"
+        f"{action_prompt}"
+    )
+
 async def generate_and_show_ai_preview(message: Message, state: FSMContext):
     data = await state.get_data()
     category = data.get("category", "General")
@@ -667,28 +653,8 @@ async def generate_and_show_ai_preview(message: Message, state: FSMContext):
         except Exception:
             pass
             
-        if preset_key == "language":
-            s_lang = source_language or "Spanish"
-            t_lang = target_language or "English"
-            lang_str = f"🌐 **Translate:** {s_lang} ➔ {t_lang}\n"
-        else:
-            lang_str = ""
-
-        correction_str = f"💡 **Note:** {correction_note}\n" if correction_note else ""
-        comment_formatted = format_comment(comment, fmt="markdown") if comment else ""
-        comment_str = f"📌 **Additional Info:**\n{comment_formatted}\n\n" if comment else ""
-            
-        preview_text = (
-            "🤖 **AI Flashcard Preview**\n\n"
-            f"📁 **Category:** {category}\n"
-            f"🎯 **Preset:** {preset_text}\n"
-            f"{lang_str}"
-            f"{correction_str}\n"
-            f"❓ **Question:**\n{question}\n\n"
-            f"💡 **Answer:**\n{answer}\n\n"
-            f"{comment_str}"
-            "✨ *Would you like to save this card, edit it, or regenerate?*"
-        )
+        updated_data = await state.get_data()
+        preview_text = _build_ai_preview_text(updated_data, correction_note=correction_note)
         await message.answer(preview_text, reply_markup=get_ai_preview_keyboard(), parse_mode="Markdown")
         
     except Exception as e:
@@ -859,34 +825,20 @@ async def process_ai_cancel(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 # --- EDIT RESPONSES HANDLERS ---
+async def _apply_ai_preview_edit(message: Message, state: FSMContext, field: str, value: str, title_suffix: str):
+    await state.update_data(**{field: value})
+    await state.set_state(CreateCardStates.waiting_for_ai_preview)
+    data = await state.get_data()
+    preview_text = _build_ai_preview_text(data, title_suffix=title_suffix)
+    await message.answer(preview_text, reply_markup=get_ai_preview_keyboard(), parse_mode="Markdown")
+
 @router.message(CreateCardStates.waiting_for_edit_question)
 async def process_edited_question(message: Message, state: FSMContext):
     new_q = message.text.strip()
     if not new_q:
         await message.answer("Please enter a valid non-empty question.")
         return
-        
-    await state.update_data(question=new_q)
-    await state.set_state(CreateCardStates.waiting_for_ai_preview)
-    
-    data = await state.get_data()
-    category = data.get("category", "General")
-    preset_text = data.get("preset_text", "AI Card")
-    answer = data.get("answer", "")
-    comment = data.get("comment", "")
-    comment_formatted = format_comment(comment, fmt="markdown") if comment else ""
-    comment_str = f"📌 **Additional Info:**\n{comment_formatted}\n\n" if comment else ""
-    
-    preview_text = (
-        "🤖 **AI Flashcard Preview (Updated Question)**\n\n"
-        f"📁 **Category:** {category}\n"
-        f"🎯 **Preset:** {preset_text}\n\n"
-        f"❓ **Question:**\n{new_q}\n\n"
-        f"💡 **Answer:**\n{answer}\n\n"
-        f"{comment_str}"
-        "✨ *Would you like to save this card, edit it further, or regenerate?*"
-    )
-    await message.answer(preview_text, reply_markup=get_ai_preview_keyboard(), parse_mode="Markdown")
+    await _apply_ai_preview_edit(message, state, "question", new_q, "Updated Question")
 
 @router.message(CreateCardStates.waiting_for_edit_answer)
 async def process_edited_answer(message: Message, state: FSMContext):
@@ -894,56 +846,14 @@ async def process_edited_answer(message: Message, state: FSMContext):
     if not new_a:
         await message.answer("Please enter a valid non-empty answer.")
         return
-        
-    await state.update_data(answer=new_a)
-    await state.set_state(CreateCardStates.waiting_for_ai_preview)
-    
-    data = await state.get_data()
-    category = data.get("category", "General")
-    preset_text = data.get("preset_text", "AI Card")
-    question = data.get("question", "")
-    comment = data.get("comment", "")
-    comment_formatted = format_comment(comment, fmt="markdown") if comment else ""
-    comment_str = f"📌 **Additional Info:**\n{comment_formatted}\n\n" if comment else ""
-    
-    preview_text = (
-        "🤖 **AI Flashcard Preview (Updated Answer)**\n\n"
-        f"📁 **Category:** {category}\n"
-        f"🎯 **Preset:** {preset_text}\n\n"
-        f"❓ **Question:**\n{question}\n\n"
-        f"💡 **Answer:**\n{new_a}\n\n"
-        f"{comment_str}"
-        "✨ *Would you like to save this card, edit it further, or regenerate?*"
-    )
-    await message.answer(preview_text, reply_markup=get_ai_preview_keyboard(), parse_mode="Markdown")
+    await _apply_ai_preview_edit(message, state, "answer", new_a, "Updated Answer")
 
 @router.message(CreateCardStates.waiting_for_edit_comment)
 async def process_edited_comment(message: Message, state: FSMContext):
     new_c = message.text.strip()
     if new_c.lower() in ["/skip", "skip"]:
         new_c = ""
-        
-    await state.update_data(comment=new_c)
-    await state.set_state(CreateCardStates.waiting_for_ai_preview)
-    
-    data = await state.get_data()
-    category = data.get("category", "General")
-    preset_text = data.get("preset_text", "AI Card")
-    question = data.get("question", "")
-    answer = data.get("answer", "")
-    comment_formatted = format_comment(new_c, fmt="markdown") if new_c else ""
-    comment_str = f"📌 **Additional Info:**\n{comment_formatted}\n\n" if new_c else ""
-    
-    preview_text = (
-        "🤖 **AI Flashcard Preview (Updated Comment)**\n\n"
-        f"📁 **Category:** {category}\n"
-        f"🎯 **Preset:** {preset_text}\n\n"
-        f"❓ **Question:**\n{question}\n\n"
-        f"💡 **Answer:**\n{answer}\n\n"
-        f"{comment_str}"
-        "✨ *Would you like to save this card, edit it further, or regenerate?*"
-    )
-    await message.answer(preview_text, reply_markup=get_ai_preview_keyboard(), parse_mode="Markdown")
+    await _apply_ai_preview_edit(message, state, "comment", new_c, "Updated Comment")
 
 CARDS_PER_PAGE = 5
 
@@ -1220,20 +1130,22 @@ async def process_share_deck_menu(callback: CallbackQuery):
     await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
     await callback.answer()
 
+async def _get_bot_username(bot) -> str:
+    try:
+        me = await bot.get_me()
+        if me and me.username:
+            return me.username
+    except Exception:
+        pass
+    return "LearningBot"
+
 @router.callback_query(F.data.startswith("share_mode_copy_"))
 async def process_share_mode_copy(callback: CallbackQuery):
     category = callback.data.split("share_mode_copy_")[1]
     user_id = callback.from_user.id
 
     token = database.create_deck_share(user_id, category, share_type="copy")
-
-    bot_username = "LearningBot"
-    try:
-        me = await callback.bot.get_me()
-        if me.username:
-            bot_username = me.username
-    except Exception:
-        pass
+    bot_username = await _get_bot_username(callback.bot)
 
     share_url = f"https://t.me/{bot_username}?start=copy_{token}"
     share_text = f"Here is a copy of my flashcard deck '{category}'! Tap the link to import it to your bot:"
@@ -1254,14 +1166,7 @@ async def process_share_mode_collab(callback: CallbackQuery):
     user_id = callback.from_user.id
 
     token = database.create_deck_share(user_id, category, share_type="collab")
-
-    bot_username = "LearningBot"
-    try:
-        me = await callback.bot.get_me()
-        if me.username:
-            bot_username = me.username
-    except Exception:
-        pass
+    bot_username = await _get_bot_username(callback.bot)
 
     share_url = f"https://t.me/{bot_username}?start=collab_{token}"
     share_text = f"Join my collaborative flashcard deck '{category}'! Tap the link to study and add words together:"

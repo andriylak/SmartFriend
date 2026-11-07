@@ -3,8 +3,35 @@ import re
 import difflib
 import random
 import secrets
+from contextlib import contextmanager
 
 DB_PATH = "learning_bot.db"
+
+@contextmanager
+def get_db_connection(commit: bool = False):
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        yield conn
+        if commit:
+            conn.commit()
+    finally:
+        conn.close()
+
+def _row_to_card_dict(row) -> dict:
+    return {
+        "id": row[0],
+        "question": row[1],
+        "answer": row[2],
+        "comment": row[3] or "",
+        "category": row[4],
+        "correct_count": row[5],
+        "incorrect_count": row[6],
+        "next_review_at": row[7],
+        "interval_days": row[8] or 0,
+        "ease_factor": row[9] or 2.5,
+        "repetition_count": row[10] or 0,
+        "direction": row[11] or "standard"
+    }
 
 def init_db():
     conn = sqlite3.connect(DB_PATH)
@@ -239,23 +266,7 @@ def get_user_cards(user_id: int, category: str = None):
         rows = cursor.fetchall()
 
     conn.close()
-    return [
-        {
-            "id": row[0],
-            "question": row[1],
-            "answer": row[2],
-            "comment": row[3] or "",
-            "category": row[4],
-            "correct_count": row[5],
-            "incorrect_count": row[6],
-            "next_review_at": row[7],
-            "interval_days": row[8] or 0,
-            "ease_factor": row[9] or 2.5,
-            "repetition_count": row[10] or 0,
-            "direction": row[11] or "standard"
-        }
-        for row in rows
-    ]
+    return [_row_to_card_dict(row) for row in rows]
 
 def get_new_cards_studied_today(user_id: int, category: str = None) -> int:
     conn = sqlite3.connect(DB_PATH)
@@ -332,6 +343,12 @@ def get_due_cards(user_id: int, category: str = None, study_all: bool = False):
 
         for cat in categories_to_check:
             collab_deck = get_collaborative_deck_for_user(user_id, cat)
+            setting = get_deck_setting(user_id, cat)
+            limit = setting.get("daily_new_limit", 20) if setting else 20
+            studied_today = get_new_cards_studied_today(user_id, cat)
+            fetch_limit = -1 if limit <= 0 else max(0, limit - studied_today)
+            limit_clause = f" LIMIT {fetch_limit}" if fetch_limit > 0 else ""
+
             if collab_deck:
                 deck_id = collab_deck["id"]
                 # 1. Fetch review and learning cards that are currently due (or overdue)
@@ -358,17 +375,7 @@ def get_due_cards(user_id: int, category: str = None, study_all: bool = False):
                         due_review_rows.append(row)
 
                 # 2. Check per-deck daily new cards limit (sorted by c.id ASC so today's batch selects pairs together)
-                setting = get_deck_setting(user_id, cat)
-                limit = setting.get("daily_new_limit", 20) if setting else 20
-                studied_today = get_new_cards_studied_today(user_id, cat)
-
-                if limit <= 0:
-                    fetch_limit = -1
-                else:
-                    fetch_limit = max(0, limit - studied_today)
-
                 if fetch_limit != 0:
-                    limit_clause = f" LIMIT {fetch_limit}" if fetch_limit > 0 else ""
                     cursor.execute(
                         f"""
                         SELECT c.id, c.question, c.answer, c.comment, c.category,
@@ -427,17 +434,7 @@ def get_due_cards(user_id: int, category: str = None, study_all: bool = False):
                         due_review_rows.append(row)
 
                 # 2. Check per-deck daily new cards limit (sorted by id ASC so today's batch selects pairs together)
-                setting = get_deck_setting(user_id, cat)
-                limit = setting.get("daily_new_limit", 20) if setting else 20
-                studied_today = get_new_cards_studied_today(user_id, cat)
-
-                if limit <= 0:
-                    fetch_limit = -1
-                else:
-                    fetch_limit = max(0, limit - studied_today)
-
                 if fetch_limit != 0:
-                    limit_clause = f" LIMIT {fetch_limit}" if fetch_limit > 0 else ""
                     cursor.execute(
                         f"""
                         SELECT id, question, answer, comment, category, correct_count, incorrect_count, next_review_at, interval_days, ease_factor, repetition_count, direction 
@@ -476,23 +473,7 @@ def get_due_cards(user_id: int, category: str = None, study_all: bool = False):
         rows = due_learning_rows + mixed_due_and_new + learning_ahead_rows
         conn.close()
 
-    return [
-        {
-            "id": row[0],
-            "question": row[1],
-            "answer": row[2],
-            "comment": row[3] or "",
-            "category": row[4],
-            "correct_count": row[5],
-            "incorrect_count": row[6],
-            "next_review_at": row[7],
-            "interval_days": row[8] or 0,
-            "ease_factor": row[9] or 2.5,
-            "repetition_count": row[10] or 0,
-            "direction": row[11] or "standard"
-        }
-        for row in rows
-    ]
+    return [_row_to_card_dict(row) for row in rows]
 
 def get_due_card_counts(user_id: int):
     categories = get_user_categories(user_id)

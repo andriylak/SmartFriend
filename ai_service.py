@@ -147,7 +147,24 @@ PRESET_PROMPTS = {
     }
 }
 
-def get_full_prompt_text(preset_key: str, source_language: Optional[str] = None, target_language: Optional[str] = None, custom_prompt: Optional[str] = None) -> str:
+PRESET_NAME_MAP = {
+    "language": "🌐 Language Learning",
+    "definitions": "📚 Definitions & Concepts",
+    "programming": "💻 Programming & Syntax",
+    "trivia": "🧠 General Knowledge",
+    "general": "📚 General Flashcard",
+    "custom": "✏️ Custom Prompt"
+}
+
+PRESET_BUTTON_TO_KEY = {title: key for key, title in PRESET_NAME_MAP.items()}
+
+def get_full_prompt_text(
+    preset_key: str,
+    source_language: Optional[str] = None,
+    target_language: Optional[str] = None,
+    custom_prompt: Optional[str] = None,
+    topic: str = "[Your Word/Topic]"
+) -> str:
     """Returns the full AI system instruction prompt template string."""
     preset_info = PRESET_PROMPTS.get(preset_key)
     if not preset_info:
@@ -161,17 +178,17 @@ def get_full_prompt_text(preset_key: str, source_language: Optional[str] = None,
     if preset_key == "custom":
         return preset_info["system_instruction"].format(
             custom_prompt=effective_custom_prompt,
-            topic="[Your Word/Topic]"
+            topic=topic
         )
     elif preset_key == "language":
         return preset_info["system_instruction"].format(
-            topic="[Your Word/Topic]",
+            topic=topic,
             source_language=source_lang,
             target_language=target_lang
         )
     else:
         return preset_info["system_instruction"].format(
-            topic="[Your Word/Topic]"
+            topic=topic
         )
 
 def clean_json_text(text: str) -> str:
@@ -251,30 +268,13 @@ async def generate_ai_card(
             "Please add `GEMINI_API_KEY=your_key_here` to your .env file to enable AI assistance."
         )
 
-    preset_info = PRESET_PROMPTS.get(preset_key)
-    if not preset_info:
-        preset_info = PRESET_PROMPTS["general"]
-        preset_key = "general"
-        
-    source_lang = source_language or "Spanish"
-    target_lang = target_language or "English"
-    effective_custom_prompt = (custom_prompt or "").strip() or "Create a high-quality, clear flashcard for learning and testing this topic."
-    
-    if preset_key == "custom":
-        instruction = preset_info["system_instruction"].format(
-            custom_prompt=effective_custom_prompt,
-            topic=topic
-        )
-    elif preset_key == "language":
-        instruction = preset_info["system_instruction"].format(
-            topic=topic,
-            source_language=source_lang,
-            target_language=target_lang
-        )
-    else:
-        instruction = preset_info["system_instruction"].format(
-            topic=topic
-        )
+    instruction = get_full_prompt_text(
+        preset_key=preset_key,
+        source_language=source_language,
+        target_language=target_language,
+        custom_prompt=custom_prompt,
+        topic=topic
+    )
 
     # Build ordered list of models to try (prioritizes config.GEMINI_MODELS)
     if hasattr(config, "GEMINI_MODELS") and config.GEMINI_MODELS:
