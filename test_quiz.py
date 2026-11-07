@@ -353,6 +353,45 @@ class TestQuizStudyMode(unittest.TestCase):
 
         asyncio.run(run_test())
 
+    @patch("database.get_due_cards")
+    def test_send_next_card_avoids_immediate_repeat(self, mock_get_due_cards):
+        mock_get_due_cards.return_value = [
+            {
+                "id": 10,
+                "question": "Q10",
+                "answer": "A10",
+                "category": "Spanish",
+                "correct_count": 1,
+                "incorrect_count": 1,
+                "direction": "standard"
+            },
+            {
+                "id": 20,
+                "question": "Q20",
+                "answer": "A20",
+                "category": "Spanish",
+                "correct_count": 1,
+                "incorrect_count": 1,
+                "direction": "standard"
+            }
+        ]
+
+        mock_message = AsyncMock()
+        mock_message.message_id = 999
+        mock_message.edit_text = AsyncMock()
+
+        async def run_test():
+            await self.state.set_state(QuizStates.studying)
+            await self.state.update_data(last_card_id=10)
+            await send_next_card(mock_message, user_id=1000, category="Spanish", state=self.state, edit_existing=True)
+
+            call_text = mock_message.edit_text.call_args[0][0]
+            self.assertIn("Q20", call_text)
+            state_data = await self.state.get_data()
+            self.assertEqual(state_data.get("last_card_id"), 20)
+
+        asyncio.run(run_test())
+
 class TestDeckPresetManager(unittest.TestCase):
     def setUp(self):
         self.storage = MemoryStorage()

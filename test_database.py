@@ -420,10 +420,81 @@ class TestDatabase(unittest.TestCase):
         
         due_queue = database.get_due_cards(user_id, cat)
         self.assertEqual(len(due_queue), 3)
-        # Order: 1. due review card, 2. new card, 3. future learning card
-        self.assertEqual(due_queue[0]["id"], card_due)
-        self.assertEqual(due_queue[1]["id"], card_new)
+        # Due review cards and new cards are shuffled together ahead of future learning-ahead cards
+        self.assertEqual({due_queue[0]["id"], due_queue[1]["id"]}, {card_due, card_new})
         self.assertEqual(due_queue[2]["id"], card_learning)
+
+    def test_new_cards_sorted_selection_and_shuffled_into_old_cards(self):
+        user_id = 70006
+        cat = "DeckMixed"
+        database.save_deck_setting(user_id, cat, daily_new_limit=4)
+
+        # Create 4 old due review cards
+        old_ids = []
+        for i in range(4):
+            cid = database.add_card(user_id, f"Old_Q_{i}", f"Old_A_{i}", cat, create_pair=False)
+            database.update_card_srs(cid, user_id, "good")
+            old_ids.append(cid)
+
+        # Clear daily_new_cards_log so our 4 new cards limit applies to the next unstudied cards
+        conn = sqlite3.connect(database.DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM daily_new_cards_log WHERE user_id = ?", (user_id,))
+        for cid in old_ids:
+            cursor.execute("UPDATE cards SET next_review_at = CURRENT_TIMESTAMP WHERE id = ?", (cid,))
+        conn.commit()
+        conn.close()
+
+        # Create 5 new paired cards (10 cards total); daily limit=4 should select the first 4 by id ASC (pair 1 + pair 2)
+        p1_std = database.add_card(user_id, "New_Q_1", "New_A_1", cat, create_pair=True)
+        p2_std = database.add_card(user_id, "New_Q_2", "New_A_2", cat, create_pair=True)
+        for i in range(3, 6):
+            database.add_card(user_id, f"New_Q_{i}", f"New_A_{i}", cat, create_pair=True)
+
+        all_cards = database.get_user_cards(user_id, cat)
+        p1_rev = next(c["id"] for c in all_cards if c["question"] == "New_A_1" and c["answer"] == "New_Q_1")
+        p2_rev = next(c["id"] for c in all_cards if c["question"] == "New_A_2" and c["answer"] == "New_Q_2")
+        expected_new_ids = {p1_std, p1_rev, p2_std, p2_rev}
+
+        orders = set()
+        for _ in range(15):
+            due_queue = database.get_due_cards(user_id, cat)
+            ids = [c["id"] for c in due_queue]
+            self.assertEqual(set(ids), set(old_ids) | expected_new_ids)
+            orders.add(tuple(ids))
+
+        self.assertGreater(len(orders), 1)
+
+    def test_due_cards_tiers_are_shuffled(self):
+        user_id = 70005
+        cat = "DeckShuffle"
+        card_ids = []
+        for i in range(10):
+            cid = database.add_card(user_id, f"Q_Shuf_{i}", f"A_Shuf_{i}", cat, create_pair=False)
+            card_ids.append(cid)
+
+        # New cards should be randomized across calls
+        orders_new = {tuple(c["id"] for c in database.get_due_cards(user_id, cat)) for _ in range(10)}
+        self.assertGreater(len(orders_new), 1)
+
+        # Mark all as learning ahead ('again') in sequential order and verify they are shuffled
+        for cid in card_ids:
+            database.update_card_srs(cid, user_id, "again")
+        orders_learning = {tuple(c["id"] for c in database.get_due_cards(user_id, cat)) for _ in range(10)}
+        self.assertGreater(len(orders_learning), 1)
+
+        # Set varying intervals for due review cards and verify they are shuffled (not sorted by interval_days)
+        conn = sqlite3.connect(database.DB_PATH)
+        cursor = conn.cursor()
+        for idx, cid in enumerate(card_ids):
+            cursor.execute(
+                "UPDATE cards SET interval_days = ?, repetition_count = 2, correct_count = 2, next_review_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (float(idx + 1), cid)
+            )
+        conn.commit()
+        conn.close()
+        orders_review = {tuple(c["id"] for c in database.get_due_cards(user_id, cat)) for _ in range(10)}
+        self.assertGreater(len(orders_review), 1)
 
     def test_delete_deck(self):
         user_id = 99999

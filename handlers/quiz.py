@@ -505,7 +505,11 @@ async def send_next_card(message: Message, user_id: int, category: str, state: F
         return
 
         
+    last_card_id = state_data.get("last_card_id")
     card = due_cards[0]
+    if len(due_cards) > 1 and last_card_id is not None and card["id"] == last_card_id:
+        card = due_cards[1]
+    await state.update_data(last_card_id=card["id"])
     await render_unrevealed_card(message, card, state, edit_existing=edit_existing)
 
 async def render_unrevealed_card(message: Message, card: dict, state: FSMContext, edit_existing: bool = True):

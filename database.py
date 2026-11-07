@@ -2,9 +2,10 @@ import sqlite3
 import os
 import re
 import difflib
+import random
 import secrets
 
-DB_PATH = os.getenv("DB_PATH", "learning_bot.db")
+DB_PATH = "learning_bot.db"
 
 def init_db():
     conn = sqlite3.connect(DB_PATH)
@@ -325,6 +326,7 @@ def get_due_cards(user_id: int, category: str = None, study_all: bool = False):
     else:
         categories_to_check = [category] if category else get_user_categories(user_id)
 
+        due_learning_rows = []
         due_review_rows = []
         new_rows = []
         learning_ahead_rows = []
@@ -346,19 +348,17 @@ def get_due_cards(user_id: int, category: str = None, study_all: bool = False):
                       AND COALESCE(ucp.is_hidden, 0) = 0
                       AND (COALESCE(ucp.correct_count, 0) > 0 OR COALESCE(ucp.incorrect_count, 0) > 0 OR COALESCE(ucp.repetition_count, 0) > 0)
                       AND (ucp.next_review_at IS NULL OR ucp.next_review_at <= CURRENT_TIMESTAMP)
-                    ORDER BY 
-                        CASE 
-                            WHEN COALESCE(ucp.interval_days, 0) < 1.0 THEN 0
-                            ELSE 1
-                        END ASC,
-                        COALESCE(ucp.interval_days, 0) ASC,
-                        RANDOM()
+                    ORDER BY RANDOM()
                     """,
                     (user_id, deck_id)
                 )
-                due_review_rows.extend(cursor.fetchall())
+                for row in cursor.fetchall():
+                    if (row[8] or 0) < 1.0:
+                        due_learning_rows.append(row)
+                    else:
+                        due_review_rows.append(row)
 
-                # 2. Check per-deck daily new cards limit
+                # 2. Check per-deck daily new cards limit (sorted by c.id ASC so today's batch selects pairs together)
                 setting = get_deck_setting(user_id, cat)
                 limit = setting.get("daily_new_limit", 20) if setting else 20
                 studied_today = get_new_cards_studied_today(user_id, cat)
@@ -403,9 +403,7 @@ def get_due_cards(user_id: int, category: str = None, study_all: bool = False):
                       AND (COALESCE(ucp.correct_count, 0) > 0 OR COALESCE(ucp.incorrect_count, 0) > 0 OR COALESCE(ucp.repetition_count, 0) > 0)
                       AND COALESCE(ucp.interval_days, 0) < 1.0
                       AND ucp.next_review_at > CURRENT_TIMESTAMP
-                    ORDER BY 
-                        ucp.next_review_at ASC,
-                        c.id ASC
+                    ORDER BY RANDOM()
                     """,
                     (user_id, deck_id)
                 )
@@ -419,19 +417,17 @@ def get_due_cards(user_id: int, category: str = None, study_all: bool = False):
                     WHERE user_id = ? AND category = ? AND collab_deck_id IS NULL
                       AND (correct_count > 0 OR incorrect_count > 0 OR repetition_count > 0)
                       AND (next_review_at IS NULL OR next_review_at <= CURRENT_TIMESTAMP)
-                    ORDER BY 
-                        CASE 
-                            WHEN interval_days < 1.0 THEN 0
-                            ELSE 1
-                        END ASC,
-                        interval_days ASC,
-                        RANDOM()
+                    ORDER BY RANDOM()
                     """,
                     (user_id, cat)
                 )
-                due_review_rows.extend(cursor.fetchall())
+                for row in cursor.fetchall():
+                    if (row[8] or 0) < 1.0:
+                        due_learning_rows.append(row)
+                    else:
+                        due_review_rows.append(row)
 
-                # 2. Check per-deck daily new cards limit
+                # 2. Check per-deck daily new cards limit (sorted by id ASC so today's batch selects pairs together)
                 setting = get_deck_setting(user_id, cat)
                 limit = setting.get("daily_new_limit", 20) if setting else 20
                 studied_today = get_new_cards_studied_today(user_id, cat)
@@ -466,15 +462,19 @@ def get_due_cards(user_id: int, category: str = None, study_all: bool = False):
                       AND (correct_count > 0 OR incorrect_count > 0 OR repetition_count > 0)
                       AND interval_days < 1.0
                       AND next_review_at > CURRENT_TIMESTAMP
-                    ORDER BY 
-                        next_review_at ASC,
-                        id ASC
+                    ORDER BY RANDOM()
                     """,
                     (user_id, cat)
                 )
                 learning_ahead_rows.extend(cursor.fetchall())
 
-        rows = due_review_rows + new_rows + learning_ahead_rows
+        random.shuffle(due_learning_rows)
+        random.shuffle(learning_ahead_rows)
+
+        mixed_due_and_new = due_review_rows + new_rows
+        random.shuffle(mixed_due_and_new)
+
+        rows = due_learning_rows + mixed_due_and_new + learning_ahead_rows
         conn.close()
 
     return [
