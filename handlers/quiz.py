@@ -409,7 +409,14 @@ async def select_category(callback: CallbackQuery, state: FSMContext):
     category_data = callback.data.split("quiz_cat_")[1]
     category = None if category_data == "all" else category_data
     
-    await state.update_data(active_category=category, category_data=category_data, study_all=False, study_msg_id=callback.message.message_id)
+    await state.update_data(
+        active_category=category,
+        category_data=category_data,
+        study_all=False,
+        study_msg_id=callback.message.message_id,
+        study_initial_total=0,
+        study_counts=None,
+    )
     await state.set_state(QuizStates.studying)
     
     await send_next_card(callback.message, callback.from_user.id, category, state, edit_existing=True)
@@ -421,7 +428,14 @@ async def process_study_ahead(callback: CallbackQuery, state: FSMContext):
     category = None if cat_param == "all" else cat_param
     
     await state.set_state(QuizStates.studying)
-    await state.update_data(active_category=category, category_data=cat_param, study_all=True, study_msg_id=callback.message.message_id)
+    await state.update_data(
+        active_category=category,
+        category_data=cat_param,
+        study_all=True,
+        study_msg_id=callback.message.message_id,
+        study_initial_total=0,
+        study_counts=None,
+    )
     
     await send_next_card(callback.message, callback.from_user.id, category, state, edit_existing=True)
     await callback.answer()
@@ -437,7 +451,12 @@ async def process_study_back_decks(callback: CallbackQuery, state: FSMContext):
         
     due_counts = database.get_due_card_counts(user_id)
     await state.set_state(QuizStates.selecting_category)
-    await state.update_data(study_all=False, study_msg_id=callback.message.message_id)
+    await state.update_data(
+        study_all=False,
+        study_msg_id=callback.message.message_id,
+        study_initial_total=0,
+        study_counts=None,
+    )
     
     await callback.message.edit_text(
         "🎯 <b>Spaced Repetition Study Mode (Anki SRS)</b>\n\n"
@@ -459,6 +478,62 @@ async def process_stop_study(callback: CallbackQuery, state: FSMContext):
     except Exception:
         pass
     await callback.answer("Study session ended.")
+
+def classify_card_study_bucket(card: dict) -> str:
+    corr = card.get("correct_count", 0) or 0
+    incorr = card.get("incorrect_count", 0) or 0
+    reps = card.get("repetition_count", 0) or 0
+    interval = card.get("interval_days")
+    if corr == 0 and incorr == 0 and reps == 0:
+        return "new"
+    if interval is not None and interval < 1.0:
+        return "repeat"
+    return "old"
+
+def _format_study_header(card: dict, study_counts: dict = None, html: bool = True) -> str:
+    active_bucket = classify_card_study_bucket(card)
+    if not study_counts:
+        study_counts = {
+            "new": 1 if active_bucket == "new" else 0,
+            "repeat": 1 if active_bucket == "repeat" else 0,
+            "old": 1 if active_bucket == "old" else 0,
+            "remaining": 1,
+            "total": 1,
+        }
+    new_c = study_counts.get("new", 0)
+    rep_c = study_counts.get("repeat", 0)
+    old_c = study_counts.get("old", 0)
+    remaining = study_counts.get("remaining", new_c + rep_c + old_c)
+    total = max(study_counts.get("total", remaining), remaining, 1)
+
+    completed = max(0, total - remaining)
+    filled = int(round((completed / total) * 10))
+    bar = "█" * filled + "░" * (10 - filled)
+
+    cat_raw = card.get("category", "General")
+    if not html:
+        return (
+            f"📁 Deck: {cat_raw}\n"
+            f"📊 [{bar}] {remaining} left\n"
+            f"🆕 New: {new_c} • 🔄 Repeat: {rep_c} • 📚 Old: {old_c}"
+        )
+
+    cat_escaped = escape(cat_raw)
+    new_part = f"🆕 New: <b>{new_c}</b>"
+    rep_part = f"🔄 Repeat: <b>{rep_c}</b>"
+    old_part = f"📚 Old: <b>{old_c}</b>"
+    if active_bucket == "new":
+        new_part = f"<u>{new_part}</u>"
+    elif active_bucket == "repeat":
+        rep_part = f"<u>{rep_part}</u>"
+    else:
+        old_part = f"<u>{old_part}</u>"
+
+    return (
+        f"📁 <b>Deck:</b> <i>{cat_escaped}</i>\n"
+        f"📊 <code>[{bar}]</code> <b>{remaining} left</b>\n"
+        f"{new_part}  •  {rep_part}  •  {old_part}"
+    )
 
 async def send_next_card(message: Message, user_id: int, category: str, state: FSMContext, edit_existing: bool = True):
     state_data = await state.get_data()
@@ -494,32 +569,54 @@ async def send_next_card(message: Message, user_id: int, category: str, state: F
         await state.update_data(study_msg_id=new_msg.message_id)
         return
 
-        
+    new_count = 0
+    repeat_count = 0
+    old_count = 0
+    for c in due_cards:
+        bucket = classify_card_study_bucket(c)
+        if bucket == "new":
+            new_count += 1
+        elif bucket == "repeat":
+            repeat_count += 1
+        else:
+            old_count += 1
+    remaining_total = len(due_cards)
+    initial_total = max(state_data.get("study_initial_total") or 0, remaining_total)
+    study_counts = {
+        "new": new_count,
+        "repeat": repeat_count,
+        "old": old_count,
+        "remaining": remaining_total,
+        "total": initial_total,
+    }
+
     last_card_id = state_data.get("last_card_id")
     card = due_cards[0]
     if len(due_cards) > 1 and last_card_id is not None and card["id"] == last_card_id:
         card = due_cards[1]
-    await state.update_data(last_card_id=card["id"])
+    await state.update_data(
+        last_card_id=card["id"],
+        study_initial_total=initial_total,
+        study_counts=study_counts,
+    )
     await render_unrevealed_card(message, card, state, edit_existing=edit_existing)
 
 async def render_unrevealed_card(message: Message, card: dict, state: FSMContext, edit_existing: bool = True):
     is_reversed = card.get("direction") == "reverse"
-    stats = f"({card['correct_count']}✅ / {card['incorrect_count']}❌)"
+    state_data = await state.get_data()
+    study_counts = state_data.get("study_counts")
+    header_html = _format_study_header(card, study_counts, html=True)
     q_escaped = escape(card['question'])
-    cat_escaped = escape(card['category'])
     
     if is_reversed:
-        mode_badge = " [Mode: ⬅️ Answer ➔ Question]"
         prompt_label = "💡 <b>Answer / Clue:</b>"
         prompt_content = f"<i>{q_escaped}</i>"
     else:
-        mode_badge = " [Mode: ➡️ Question ➔ Answer]"
         prompt_label = "❓ <b>Question:</b>"
         prompt_content = f"<i>{q_escaped}</i>"
         
     card_text = (
-        f"📝 <b>Quiz Card</b> (ID: {card['id']}) {stats}{mode_badge}\n"
-        f"📁 Category: <i>{cat_escaped}</i>\n\n"
+        f"{header_html}\n\n"
         f"{prompt_label}\n"
         f"{prompt_content}"
     )
@@ -540,9 +637,9 @@ async def render_unrevealed_card(message: Message, card: dict, state: FSMContext
     try:
         new_msg = await message.answer(card_text, reply_markup=reply_kb, parse_mode="HTML")
     except Exception:
+        header_plain = _format_study_header(card, study_counts, html=False)
         plain_text = (
-            f"📝 Quiz Card (ID: {card['id']}) {stats}\n"
-            f"📁 Category: {card['category']}\n\n"
+            f"{header_plain}\n\n"
             f"{'Answer' if is_reversed else 'Question'}:\n"
             f"{card['question']}"
         )
@@ -552,18 +649,18 @@ async def render_unrevealed_card(message: Message, card: dict, state: FSMContext
 async def render_revealed_card(message: Message, card: dict, state: FSMContext, edit_existing: bool = True, is_reversed: bool = None):
     if is_reversed is None:
         is_reversed = card.get("direction") == "reverse"
-    stats = f"({card['correct_count']}✅ / {card['incorrect_count']}❌)"
+    state_data = await state.get_data()
+    study_counts = state_data.get("study_counts")
+    header_html = _format_study_header(card, study_counts, html=True)
     q_escaped = escape(card['question'])
     a_escaped = escape(card['answer'])
-    cat_escaped = escape(card['category'])
     comment = card.get('comment', '')
     comment_html = f"\n\n📌 <b>Additional Info:</b>\n{format_comment(comment, fmt='html')}" if comment else ""
     comment_plain = f"\n\nAdditional Info:\n{format_comment(comment, fmt='plain')}" if comment else ""
     
     if is_reversed:
         revealed_text = (
-            f"📝 <b>Quiz Card</b> (ID: {card['id']}) {stats}\n"
-            f"📁 Category: <i>{cat_escaped}</i>\n\n"
+            f"{header_html}\n\n"
             f"💡 <b>Answer / Clue:</b>\n"
             f"<i>{q_escaped}</i>\n\n"
             f"❓ <b>Question / Target:</b>\n"
@@ -573,8 +670,7 @@ async def render_revealed_card(message: Message, card: dict, state: FSMContext, 
         )
     else:
         revealed_text = (
-            f"📝 <b>Quiz Card</b> (ID: {card['id']}) {stats}\n"
-            f"📁 Category: <i>{cat_escaped}</i>\n\n"
+            f"{header_html}\n\n"
             f"❓ <b>Question:</b>\n"
             f"<i>{q_escaped}</i>\n\n"
             f"💡 <b>Answer:</b>\n"
@@ -594,9 +690,9 @@ async def render_revealed_card(message: Message, card: dict, state: FSMContext, 
             await state.update_data(study_msg_id=message.message_id)
             return
         except Exception:
+            header_plain = _format_study_header(card, study_counts, html=False)
             plain_text = (
-                f"📝 Quiz Card (ID: {card['id']}) {stats}\n"
-                f"📁 Category: {card['category']}\n\n"
+                f"{header_plain}\n\n"
                 f"Question: {card['question']}\n"
                 f"Answer: {card['answer']}"
                 f"{comment_plain}\n\n"

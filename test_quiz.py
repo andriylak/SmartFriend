@@ -393,6 +393,79 @@ class TestQuizStudyMode(unittest.TestCase):
 
         asyncio.run(run_test())
 
+    @patch("database.get_due_cards")
+    def test_study_header_shows_progress_bar_and_remaining_counts(self, mock_get_due_cards):
+        mock_get_due_cards.return_value = [
+            {
+                "id": 101,
+                "question": "New word",
+                "answer": "Answer 1",
+                "category": "Czech",
+                "correct_count": 0,
+                "incorrect_count": 0,
+                "repetition_count": 0,
+                "interval_days": 0.0,
+                "direction": "standard",
+            },
+            {
+                "id": 102,
+                "question": "Repeat word",
+                "answer": "Answer 2",
+                "category": "Czech",
+                "correct_count": 0,
+                "incorrect_count": 1,
+                "repetition_count": 0,
+                "interval_days": 0.007,
+                "direction": "standard",
+            },
+            {
+                "id": 103,
+                "question": "Old word 1",
+                "answer": "Answer 3",
+                "category": "Czech",
+                "correct_count": 3,
+                "incorrect_count": 0,
+                "repetition_count": 2,
+                "interval_days": 6.0,
+                "direction": "standard",
+            },
+            {
+                "id": 104,
+                "question": "Old word 2",
+                "answer": "Answer 4",
+                "category": "Czech",
+                "correct_count": 5,
+                "incorrect_count": 1,
+                "repetition_count": 3,
+                "interval_days": 15.0,
+                "direction": "reverse",
+            },
+        ]
+
+        mock_message = AsyncMock()
+        mock_message.message_id = 999
+        mock_message.edit_text = AsyncMock()
+
+        async def run_test():
+            await self.state.set_state(QuizStates.studying)
+            await self.state.update_data(study_initial_total=8)
+            await send_next_card(mock_message, user_id=1000, category="Czech", state=self.state, edit_existing=True)
+
+            call_text = mock_message.edit_text.call_args[0][0]
+            # Verify deck name and progress bar are shown
+            self.assertIn("📁 <b>Deck:</b> <i>Czech</i>", call_text)
+            self.assertIn("<code>[█████░░░░░]</code> <b>4 left</b>", call_text)
+            # Verify breakdown counts: 1 new, 1 repeat, 2 old
+            self.assertIn("🆕 New: <b>1</b>", call_text)
+            self.assertIn("🔄 Repeat: <b>1</b>", call_text)
+            self.assertIn("📚 Old: <b>2</b>", call_text)
+            # Verify old useless info is removed
+            self.assertNotIn("Quiz Card", call_text)
+            self.assertNotIn("ID:", call_text)
+            self.assertNotIn("Mode:", call_text)
+
+        asyncio.run(run_test())
+
 class TestDeckPresetManager(unittest.TestCase):
     def setUp(self):
         self.storage = MemoryStorage()
