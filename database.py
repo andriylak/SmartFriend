@@ -166,6 +166,18 @@ def init_db():
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_cards_collab_deck ON cards(collab_deck_id, direction)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_daily_log_lookup ON daily_new_cards_log(user_id, studied_date, category)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_deck_members_user ON collaborative_deck_members(user_id, deck_id)")
+
+    # Migration: Align existing day-level review timestamps (interval >= 1 day) to start of local day
+    cursor.execute("""
+        UPDATE cards
+        SET next_review_at = datetime(next_review_at, 'localtime', 'start of day', 'utc')
+        WHERE interval_days >= 1.0 AND next_review_at IS NOT NULL
+    """)
+    cursor.execute("""
+        UPDATE user_card_progress
+        SET next_review_at = datetime(next_review_at, 'localtime', 'start of day', 'utc')
+        WHERE interval_days >= 1.0 AND next_review_at IS NOT NULL
+    """)
         
     conn.commit()
     conn.close()
@@ -403,7 +415,11 @@ def get_due_cards(user_id: int, category: str = None, study_all: bool = False):
                     WHERE c.collab_deck_id = ?
                       AND COALESCE(ucp.is_hidden, 0) = 0
                       AND (COALESCE(ucp.correct_count, 0) > 0 OR COALESCE(ucp.incorrect_count, 0) > 0 OR COALESCE(ucp.repetition_count, 0) > 0)
-                      AND (ucp.next_review_at IS NULL OR ucp.next_review_at <= CURRENT_TIMESTAMP)
+                      AND (
+                          ucp.next_review_at IS NULL
+                          OR (COALESCE(ucp.interval_days, 0) < 1.0 AND ucp.next_review_at <= CURRENT_TIMESTAMP)
+                          OR (COALESCE(ucp.interval_days, 0) >= 1.0 AND ucp.next_review_at < datetime('now', 'localtime', 'start of day', '+1 day', 'utc'))
+                      )
                     ORDER BY RANDOM()
                     """,
                     (user_id, deck_id)
@@ -425,9 +441,9 @@ def get_due_cards(user_id: int, category: str = None, study_all: bool = False):
                         FROM cards c
                         LEFT JOIN user_card_progress ucp ON c.id = ucp.card_id AND ucp.user_id = ?
                         WHERE c.collab_deck_id = ?
-                          AND COALESCE(ucp.is_hidden, 0) = 0
+                           AND COALESCE(ucp.is_hidden, 0) = 0
                           AND COALESCE(ucp.correct_count, 0) = 0 AND COALESCE(ucp.incorrect_count, 0) = 0 AND COALESCE(ucp.repetition_count, 0) = 0 
-                          AND (ucp.next_review_at IS NULL OR ucp.next_review_at <= CURRENT_TIMESTAMP)
+                          AND (ucp.next_review_at IS NULL OR ucp.next_review_at < datetime('now', 'localtime', 'start of day', '+1 day', 'utc'))
                         ORDER BY c.id ASC
                         {limit_clause}
                         """,
@@ -462,7 +478,11 @@ def get_due_cards(user_id: int, category: str = None, study_all: bool = False):
                     FROM cards 
                     WHERE user_id = ? AND category = ? AND collab_deck_id IS NULL
                       AND (correct_count > 0 OR incorrect_count > 0 OR repetition_count > 0)
-                      AND (next_review_at IS NULL OR next_review_at <= CURRENT_TIMESTAMP)
+                      AND (
+                          next_review_at IS NULL
+                          OR (COALESCE(interval_days, 0) < 1.0 AND next_review_at <= CURRENT_TIMESTAMP)
+                          OR (COALESCE(interval_days, 0) >= 1.0 AND next_review_at < datetime('now', 'localtime', 'start of day', '+1 day', 'utc'))
+                      )
                     ORDER BY RANDOM()
                     """,
                     (user_id, cat)
@@ -481,7 +501,7 @@ def get_due_cards(user_id: int, category: str = None, study_all: bool = False):
                         FROM cards 
                         WHERE user_id = ? AND category = ? AND collab_deck_id IS NULL
                           AND correct_count = 0 AND incorrect_count = 0 AND repetition_count = 0 
-                          AND (next_review_at IS NULL OR next_review_at <= CURRENT_TIMESTAMP)
+                          AND (next_review_at IS NULL OR next_review_at < datetime('now', 'localtime', 'start of day', '+1 day', 'utc'))
                         ORDER BY id ASC
                         {limit_clause}
                         """,
@@ -538,7 +558,11 @@ def get_due_card_counts(user_id: int):
                 WHERE c.collab_deck_id = ?
                   AND COALESCE(ucp.is_hidden, 0) = 0
                   AND (COALESCE(ucp.correct_count, 0) > 0 OR COALESCE(ucp.incorrect_count, 0) > 0 OR COALESCE(ucp.repetition_count, 0) > 0)
-                  AND (ucp.next_review_at IS NULL OR ucp.next_review_at <= CURRENT_TIMESTAMP OR COALESCE(ucp.interval_days, 0) < 1.0)
+                  AND (
+                      ucp.next_review_at IS NULL
+                      OR COALESCE(ucp.interval_days, 0) < 1.0
+                      OR ucp.next_review_at < datetime('now', 'localtime', 'start of day', '+1 day', 'utc')
+                  )
                 """,
                 (user_id, deck_id)
             )
@@ -554,7 +578,7 @@ def get_due_card_counts(user_id: int):
                     WHERE c.collab_deck_id = ?
                       AND COALESCE(ucp.is_hidden, 0) = 0
                       AND COALESCE(ucp.correct_count, 0) = 0 AND COALESCE(ucp.incorrect_count, 0) = 0 AND COALESCE(ucp.repetition_count, 0) = 0
-                      AND (ucp.next_review_at IS NULL OR ucp.next_review_at <= CURRENT_TIMESTAMP)
+                      AND (ucp.next_review_at IS NULL OR ucp.next_review_at < datetime('now', 'localtime', 'start of day', '+1 day', 'utc'))
                     """,
                     (user_id, deck_id)
                 )
@@ -567,7 +591,11 @@ def get_due_card_counts(user_id: int):
                 FROM cards
                 WHERE user_id = ? AND category = ? AND collab_deck_id IS NULL
                   AND (correct_count > 0 OR incorrect_count > 0 OR repetition_count > 0)
-                  AND (next_review_at IS NULL OR next_review_at <= CURRENT_TIMESTAMP OR interval_days < 1.0)
+                  AND (
+                      next_review_at IS NULL
+                      OR COALESCE(interval_days, 0) < 1.0
+                      OR next_review_at < datetime('now', 'localtime', 'start of day', '+1 day', 'utc')
+                  )
                 """,
                 (user_id, cat)
             )
@@ -581,7 +609,7 @@ def get_due_card_counts(user_id: int):
                     FROM cards
                     WHERE user_id = ? AND category = ? AND collab_deck_id IS NULL
                       AND correct_count = 0 AND incorrect_count = 0 AND repetition_count = 0
-                      AND (next_review_at IS NULL OR next_review_at <= CURRENT_TIMESTAMP)
+                      AND (next_review_at IS NULL OR next_review_at < datetime('now', 'localtime', 'start of day', '+1 day', 'utc'))
                     """,
                     (user_id, cat)
                 )
@@ -867,11 +895,17 @@ def update_card_srs(card_id: int, user_id: int, rating: str) -> dict:
             ease = round(ease + 0.15, 2)
         correct_count += 1
 
+    next_review_expr = (
+        "datetime('now', 'localtime', 'start of day', '+' || ? || ' days', 'utc')"
+        if interval >= 1.0
+        else "datetime('now', '+' || ? || ' days')"
+    )
+
     if collab_deck_id is not None:
         cursor.execute(
-            """
+            f"""
             INSERT INTO user_card_progress (user_id, card_id, interval_days, ease_factor, repetition_count, next_review_at, correct_count, incorrect_count, is_hidden)
-            VALUES (?, ?, ?, ?, ?, datetime('now', '+' || ? || ' days'), ?, ?, 0)
+            VALUES (?, ?, ?, ?, ?, {next_review_expr}, ?, ?, 0)
             ON CONFLICT(user_id, card_id) DO UPDATE SET
                 interval_days = excluded.interval_days,
                 ease_factor = excluded.ease_factor,
@@ -885,12 +919,12 @@ def update_card_srs(card_id: int, user_id: int, rating: str) -> dict:
         )
     else:
         cursor.execute(
-            """
+            f"""
             UPDATE cards SET 
                 interval_days = ?,
                 ease_factor = ?,
                 repetition_count = ?,
-                next_review_at = datetime('now', '+' || ? || ' days'),
+                next_review_at = {next_review_expr},
                 correct_count = ?,
                 incorrect_count = ?
             WHERE id = ? AND user_id = ?

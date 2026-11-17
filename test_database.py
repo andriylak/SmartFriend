@@ -556,6 +556,56 @@ class TestDatabase(unittest.TestCase):
         self.assertIsNone(database.get_card_by_id(collab_cid, member_id))
         self.assertIsNotNone(database.get_card_by_id(collab_cid, owner_id))
 
+    def test_review_cards_align_to_local_start_of_day(self):
+        user_id = 80010
+        cat = "CalendarDayDeck"
+        c1 = database.add_card(user_id, "Q_Morning", "A_Morning", cat, create_pair=False)
+        c2 = database.add_card(user_id, "Q_Evening", "A_Evening", cat, create_pair=False)
+
+        # Grading 'good' (1.0 day) schedules next_review_at at tomorrow's local start of day (in UTC)
+        database.update_card_srs(c1, user_id, "good")
+        database.update_card_srs(c2, user_id, "good")
+
+        conn = sqlite3.connect(database.DB_PATH)
+        cursor = conn.cursor()
+        expected_tomorrow_start = cursor.execute(
+            "SELECT datetime('now', 'localtime', 'start of day', '+1.0 days', 'utc')"
+        ).fetchone()[0]
+        actual_c1 = cursor.execute("SELECT next_review_at FROM cards WHERE id = ?", (c1,)).fetchone()[0]
+        self.assertEqual(actual_c1, expected_tomorrow_start)
+
+        # Neither card is due today
+        self.assertEqual(len(database.get_due_cards(user_id, cat)), 0)
+        self.assertEqual(database.get_due_card_counts(user_id).get(cat), 0)
+
+        # Simulate cards scheduled for different hours on TODAY's local calendar date (e.g. 08:00 and 23:50 local time)
+        cursor.execute(
+            "UPDATE cards SET next_review_at = datetime('now', 'localtime', 'start of day', '+8 hours', 'utc') WHERE id = ?",
+            (c1,)
+        )
+        cursor.execute(
+            "UPDATE cards SET next_review_at = datetime('now', 'localtime', 'start of day', '+23 hours', '+50 minutes', 'utc') WHERE id = ?",
+            (c2,)
+        )
+        conn.commit()
+        conn.close()
+
+        # Both cards must be due together today regardless of the current hour
+        due_today = database.get_due_cards(user_id, cat)
+        self.assertEqual({c["id"] for c in due_today}, {c1, c2})
+        self.assertEqual(database.get_due_card_counts(user_id).get(cat), 2)
+
+        # Running init_db normalizes existing interval >= 1.0 cards to start of local day
+        database.init_db()
+        conn = sqlite3.connect(database.DB_PATH)
+        cursor = conn.cursor()
+        expected_today_start = cursor.execute(
+            "SELECT datetime('now', 'localtime', 'start of day', 'utc')"
+        ).fetchone()[0]
+        norm_c2 = cursor.execute("SELECT next_review_at FROM cards WHERE id = ?", (c2,)).fetchone()[0]
+        conn.close()
+        self.assertEqual(norm_c2, expected_today_start)
+
 if __name__ == "__main__":
     unittest.main()
 
